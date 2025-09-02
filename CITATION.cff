@@ -1,0 +1,31 @@
+# This CITATION.cff file was generated with cffinit.
+# Visit https://bit.ly/cffinit to generate yours today!
+
+cff-version: 1.2.0
+title: INAES (Ice Nucleation Analysis eSoftware)
+message: 'If you use this software, please cite it as below.'
+type: software
+authors:
+  - given-names: Tommaso
+    family-names: Lamesta
+    email: lamestatommaso0@gmail.com
+repository-code: >-
+  https://github.com/lamesta/INAES-Ice-Nucleation-Analysis-eSoftware
+url: >-
+  https://www.researchgate.net/profile/Tommaso-Lamesta?ev=hdr_xprf
+abstract: >-
+  INAES is an open-source application for ice nucleation
+  data analysis (Freezing Curves, LOESS-based INP families
+  estimates, metadata integration, boxplots, correlation
+  analyses).
+keywords:
+  - Ice Nucleation
+  - INP
+  - Microbiology
+  - freezing curves
+  - shiny
+  - R
+license: MIT
+commit: eb675bdace19ac6b186a1dc4a3b5c15c2acbd3be
+version: 0.1.0-beta
+date-released: '2025-07-29'
