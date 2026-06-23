@@ -1,0 +1,34 @@
+__pycache__/
+*.py[cod]
+*$py.class
+
+.DS_Store
+
+.venv/
+.venv-windows-build/
+venv/
+env/
+
+build/
+dist/
+release_delivery/
+
+*.log
+
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+_vendor/
+
+# Local migration notes and legacy/parity-only helpers are not part of the
+# public desktop distribution repository.
+MIGRATION_GAP_DETAIL.md
+MIGRATION_ROADMAP.md
+QT_DESIGNER_WORKFLOW.md
+scripts/build_drama_three_panel_*.py
+scripts/create_macos_launcher_app.sh
+tests/parity_*_vs_legacy.py
+tests/run_full_check.py
+docs/*.docx
+docs/*.tex

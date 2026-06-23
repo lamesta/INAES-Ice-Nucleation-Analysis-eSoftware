@@ -1,0 +1,12 @@
+# Keep GitHub language statistics focused on the current PySide6 application.
+*.py linguist-language=Python
+*.R linguist-vendored
+*.r linguist-vendored
+*.js linguist-vendored
+*.json linguist-vendored
+
+assets/** linguist-vendored
+docs/** linguist-documentation
+packaging/** linguist-vendored
+scripts/*.bat linguist-vendored
+scripts/*.ps1 linguist-vendored
