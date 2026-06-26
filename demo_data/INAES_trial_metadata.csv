@@ -1,0 +1,4 @@
+Sequencing_ID,Sample,Sample_Data,Sample.Num,Location,GenLatitude,Control,Date,Site,Depth,Latitude,Longitude,pH,WC,Air_T_Mean,Rel_Hum,nM10_b5,nM15_b5,nM10_b02,nM15_b02
+DEMO-S1,S1,S1,1,Site1,10.0,No,2026-01-01,Site1,,Site1_latitude_hidden,Site1_longitude_hidden,5.63,25.77689243,-9.3,67.31,1146092.42723656,17931264.6544758,,
+DEMO-S2,S2,S2,2,Site2,20.0,No,2026-01-02,Site2,,Site2_latitude_hidden,Site2_longitude_hidden,7.19,8.250298924,-13.81,80.79,19924414.7494893,71875032.1546587,536457.074297366,13930645.3473018
+DEMO-S3,S3,S3,3,Site3,30.0,No,2026-01-03,Site3,,Site3_latitude_hidden,Site3_longitude_hidden,4.42,0.89112747,0.14,77.61,22520.2907283564,312316.184498203,3524.54317912724,212043.592963413
