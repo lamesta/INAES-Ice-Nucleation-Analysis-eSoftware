@@ -89,6 +89,15 @@ if (-not (Test-Path $VenvDir)) {
 }
 $VenvPython = Join-Path $VenvDir "Scripts\python.exe"
 
+if (-not (Test-Path $VenvPython)) {
+  Write-Warning "Virtualenv creation via '$PythonCmd' did not produce $VenvPython. Retrying with 'python' on PATH."
+  if (Test-Path $VenvDir) { Remove-Item -Recurse -Force $VenvDir }
+  & python -m venv $VenvDir
+}
+if (-not (Test-Path $VenvPython)) {
+  throw "Failed to create build virtualenv at $VenvDir (no python.exe found after venv creation)."
+}
+
 & $VenvPython -m pip install --upgrade pip setuptools wheel
 & $VenvPython -m pip install -r requirements.txt
 & $VenvPython -m pip install --upgrade pyinstaller kaleido pillow
