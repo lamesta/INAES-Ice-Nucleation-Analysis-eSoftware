@@ -142,6 +142,12 @@ def suggest_curves_column_mapping(df: pd.DataFrame) -> dict[str, str]:
 
 
 def _split_sample_name_components(sample_value: Any) -> tuple[str, str | None, float | None]:
+    """Return (sample_base, size_from_name, trailing_dilution_from_name).
+
+    The trailing dilution is recognized only from the last token, and only
+    when it is a power of ten (10, 100, 1000, ... with no upper bound),
+    with an optional trailing 'x' (e.g. '100x').
+    """
     s = str(sample_value or "").strip()
     if not s:
         return "", None, None
@@ -151,7 +157,7 @@ def _split_sample_name_components(sample_value: Any) -> tuple[str, str | None, f
         return s, None, None
 
     dilution: float | None = None
-    m_d = re.fullmatch(r"(?i)(100000|10000|1000|100|10)x?", str(tokens[-1]).strip())
+    m_d = re.fullmatch(r"(?i)(10+)x?", str(tokens[-1]).strip())
     if m_d:
         try:
             dilution = float(m_d.group(1))

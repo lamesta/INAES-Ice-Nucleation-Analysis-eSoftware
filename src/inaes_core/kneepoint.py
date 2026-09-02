@@ -121,9 +121,15 @@ def _kp_fit_piecewise_breaks(pw_model: Any, n_segments: int) -> np.ndarray:
     try:
         breaks = pw_model.fitfast(n_segments, pop=3)
         return np.asarray(breaks, dtype=float)
-    except Exception:
-        breaks = pw_model.fit(n_segments)
-        return np.asarray(breaks, dtype=float)
+    except Exception as exc_fitfast:
+        try:
+            breaks = pw_model.fit(n_segments)
+            return np.asarray(breaks, dtype=float)
+        except Exception as exc_fit:
+            raise RuntimeError(
+                f"Piecewise breakpoint fitting failed for n_segments={n_segments} "
+                f"after fit_guess, fitfast ({exc_fitfast}), and fit ({exc_fit})."
+            ) from exc_fit
 
 
 def _kp_candidate_internal_breaks(x: np.ndarray, *, min_k: int = 2, max_k: int = 14) -> list[int]:
@@ -677,6 +683,9 @@ def kneepoint_analysis(
         idx = rng.integers(0, len(x), size=len(x))
         xb = x[idx]
         yb = y[idx]
+        order = np.argsort(xb, kind="stable")
+        xb = xb[order]
+        yb = yb[order]
         try:
             spline_b = UnivariateSpline(xb, yb, s=_map_spar_to_s(xb, yb, float(spar)))
             yb_grid = spline_b(x_grid)
