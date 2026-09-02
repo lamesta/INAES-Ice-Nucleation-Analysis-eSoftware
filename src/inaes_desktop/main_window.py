@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import traceback
 import uuid
 import re
 import zipfile
@@ -1182,33 +1183,45 @@ def _compute_kneepoint_payload(
 
     progress(3, "Running kneepoint analysis...")
     _check_cancel()
-    res = kneepoint_analysis(
-        curves_df,
-        sample=sample,
-        size=size,
-        dilutions=dilutions,
-        spar=float(spar),
-        n_breaks=int(n_breaks),
-        flat_quantile=float(flat_quantile),
-        rise_quantile=float(rise_quantile),
-        segment_selection_mode=str(segment_selection_mode or "legacy"),
-        segment_min_internal_breaks=int(segment_min_internal_breaks),
-        segment_max_internal_breaks=int(segment_max_internal_breaks),
-        temp_min=temp_min,
-        temp_max=temp_max,
-        boot_R=200,
-        cv_k=5,
-    )
+    try:
+        res = kneepoint_analysis(
+            curves_df,
+            sample=sample,
+            size=size,
+            dilutions=dilutions,
+            spar=float(spar),
+            n_breaks=int(n_breaks),
+            flat_quantile=float(flat_quantile),
+            rise_quantile=float(rise_quantile),
+            segment_selection_mode=str(segment_selection_mode or "legacy"),
+            segment_min_internal_breaks=int(segment_min_internal_breaks),
+            segment_max_internal_breaks=int(segment_max_internal_breaks),
+            temp_min=temp_min,
+            temp_max=temp_max,
+            boot_R=200,
+            cv_k=5,
+        )
+    except Exception as exc:
+        raise RuntimeError(
+            f"Kneepoint analysis failed for sample={sample!r} size={size!r} "
+            f"dilutions={list(dilutions)!r}: {exc}\n{traceback.format_exc()}"
+        ) from exc
     _check_cancel()
     progress(65, "Preparing filtered points...")
-    points = filter_kp_points_for_sample(
-        curves_df,
-        sample=sample,
-        size=size,
-        dilutions=dilutions,
-        temp_min=temp_min,
-        temp_max=temp_max,
-    )
+    try:
+        points = filter_kp_points_for_sample(
+            curves_df,
+            sample=sample,
+            size=size,
+            dilutions=dilutions,
+            temp_min=temp_min,
+            temp_max=temp_max,
+        )
+    except Exception as exc:
+        raise RuntimeError(
+            f"Kneepoint point filtering failed for sample={sample!r} size={size!r}: "
+            f"{exc}\n{traceback.format_exc()}"
+        ) from exc
     _check_cancel()
     progress(92, "Finalizing...")
     return {
