@@ -113,6 +113,10 @@ def _apply_app_icon(app: QApplication) -> None:
 def run() -> None:
     _configure_qtwebengine_process()
     app = QApplication(sys.argv)
+    # Force the Fusion style so the custom QSS theme (tab bar, radii, sliders)
+    # actually renders instead of being overridden by the native macOS/Windows
+    # widget chrome, which largely ignores stylesheet rules for QTabBar/QPushButton.
+    app.setStyle("Fusion")
     app.setApplicationName("INAES")
     app.setApplicationDisplayName("INAES")
     app.setOrganizationName("INAES")
