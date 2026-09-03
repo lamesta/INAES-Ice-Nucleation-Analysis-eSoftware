@@ -153,6 +153,7 @@ NM_METHOD_TO_WORKFLOW_KEY: dict[str, str] = {
     "surface_area_direct": "surface_area_direct",
     "surface_area_bet": "surface_area_bet_from_mass",
     "cell_count": "cell_concentration",
+    "fungal_biomass_nm": "fungal_biomass_nm",
     "air_washoff": "air_washoff",
     "air_drop_on": "air_drop_on",
     "custom_dose": "custom_dose",
@@ -170,6 +171,9 @@ RAW_METHOD_FORMULA_HTML: dict[str, str] = {
     "surface_area_direct": "<i>n</i><sub>s</sub>(T) = -ln(1 − FF) / <i>A</i><sub>droplet</sub>",
     "surface_area_bet_from_mass": "<i>n</i><sub>s,BET</sub>(T) = <i>n</i><sub>M</sub>(T) / θ",
     "cell_concentration": "<i>n</i><sub>cell</sub>(T) = - (1 / <i>V</i><sub>drop</sub>) · ln(1 − FF) · (<i>d</i> / <i>c</i><sub>cells</sub>)",
+    "fungal_biomass_nm": (
+        "<i>N</i><sub>m</sub>(T) = [-ln(1 − FF) / <i>V</i><sub>drop</sub>] × (<i>V</i><sub>wash</sub> / <i>m</i>) × <i>d</i>"
+    ),
     "air_washoff": "<i>N</i><sub>INP,air</sub>(T) = -ln(1 − FF) · (<i>V</i><sub>wash</sub> / (<i>V</i><sub>drop</sub> · <i>x</i> · <i>V</i><sub>s</sub>))",
     "air_drop_on": "<i>N</i><sub>INP,air</sub>(T) = -ln(1 − FF) · (<i>A</i><sub>filter</sub> / (α · <i>V</i><sub>s</sub>))",
     "custom_dose": "<i>n</i><sub>X</sub>(T) = -ln(1 − FF) / <i>X</i>",
@@ -1322,6 +1326,7 @@ RAW_METHOD_REQUIRED_PARAMS: dict[str, set[str]] = {
     "surface_area_direct": {"area_per_drop"},
     "surface_area_bet_from_mass": {"mass_conc", "bet_area"},
     "cell_concentration": {"cell_conc"},
+    "fungal_biomass_nm": {"wash_volume", "sample_mass"},
     "air_washoff": {"wash_volume", "air_filter_frac", "air_volume_l"},
     "air_drop_on": {"air_volume_l", "filter_area", "drop_area"},
     "custom_dose": {"custom_dose"},
@@ -1333,7 +1338,10 @@ def _wrap_scroll(widget: QWidget, *, horizontal: bool = False) -> QScrollArea:
     # keep left control panels width driven by their content instead of over-stretching.
     lay = widget.layout()
     if lay is not None:
-        lay.setSizeConstraint(QLayout.SetMinAndMaxSize)
+        # SetMinimumSize (not SetMinAndMaxSize): the panel may shrink down to its
+        # real minimum and fill the viewport width instead of being pinned to the
+        # widest child's sizeHint, which previously clipped wide control panels.
+        lay.setSizeConstraint(QLayout.SetMinimumSize)
     sc = QScrollArea()
     sc.setWidget(widget)
     sc.setWidgetResizable(True)
@@ -1547,13 +1555,53 @@ class SliderNumberInput(QWidget):
         self._sync_label(cur)
 
 
-def _apply_card_shadow(widget: QWidget, *, blur: int = 22, y_offset: int = 5, alpha: int = 70) -> None:
+def _apply_card_shadow(widget: QWidget, *, blur: int = 14, y_offset: int = 3, alpha: int = 38) -> None:
     """Soft drop-shadow elevation for a 'card' panel (QSS has no box-shadow)."""
     effect = QGraphicsDropShadowEffect(widget)
     effect.setBlurRadius(blur)
     effect.setOffset(0, y_offset)
     effect.setColor(QColor(0, 0, 0, alpha))
     widget.setGraphicsEffect(effect)
+
+
+def _apply_card_shadows_in(root: QWidget) -> int:
+    """Give every top-level group box in `root` the card elevation.
+
+    Nested group boxes are skipped so cards never stack two shadows, and boxes
+    that already carry an effect (set explicitly at build time) are left alone.
+    """
+    count = 0
+    for box in root.findChildren(QGroupBox):
+        if box.graphicsEffect() is not None:
+            continue
+        if str(box.objectName()) == "FlatGroup":
+            continue
+        parent = box.parentWidget()
+        nested = False
+        while parent is not None and parent is not root:
+            if isinstance(parent, QGroupBox):
+                nested = True
+                break
+            parent = parent.parentWidget()
+        if nested:
+            continue
+        _apply_card_shadow(box)
+        count += 1
+    return count
+
+
+def _add_page_header(layout: QLayout, title: str, subtitle: str) -> None:
+    """Mockup-style page header (title + subtitle) at the top of a tab."""
+    header = QVBoxLayout()
+    header.setSpacing(2)
+    lbl_title = QLabel(title)
+    lbl_title.setProperty("pageTitle", True)
+    header.addWidget(lbl_title)
+    lbl_sub = QLabel(subtitle)
+    lbl_sub.setProperty("pageSubtitle", True)
+    lbl_sub.setWordWrap(True)
+    header.addWidget(lbl_sub)
+    layout.addLayout(header)
 
 
 def _make_labeled_slider(
@@ -1780,6 +1828,7 @@ class ChipMultiSelect(QGroupBox):
         lay.addLayout(top)
 
         self._chip_area = QWidget()
+        self._chip_area.setObjectName("ChipArea")
         self._flow = FlowLayout(self._chip_area, margin=0, spacing=6)
         lay.addWidget(self._chip_area)
 
@@ -1865,12 +1914,13 @@ class DataUploadTab(QWidget):
         self.state.nm_axis_label_changed.connect(self._on_nm_axis_label_changed)
 
     def _build_ui(self) -> None:
-        root = QHBoxLayout(self)
+        root = QVBoxLayout(self)
         root.setContentsMargins(8, 8, 8, 8)
         root.setSpacing(8)
+        _add_page_header(root, "Data Upload and nM", "Load curves and metadata, map columns, and choose the nM normalization")
 
         splitter = QSplitter(Qt.Horizontal)
-        root.addWidget(splitter)
+        root.addWidget(splitter, stretch=1)
 
         left_panel = QWidget()
         left = QVBoxLayout(left_panel)
@@ -2441,6 +2491,7 @@ class DataUploadTab(QWidget):
             ("Surface area direct (n_s m^-2)", "surface_area_direct"),
             ("Surface area BET (n_s,BET m^-2)", "surface_area_bet"),
             ("Cell count (n_cell cell^-1)", "cell_count"),
+            ("Fungal biomass (N_m g^-1 mycelium)", "fungal_biomass_nm"),
             ("Air wash-off (N_INP_air L^-1)", "air_washoff"),
             ("Air drop-on (N_INP_air L^-1)", "air_drop_on"),
             ("Custom dose (nX X^-1)", "custom_dose"),
@@ -3946,12 +3997,13 @@ class FreezingCurvesTab(QWidget):
         self._on_state_changed()
 
     def _build_ui(self) -> None:
-        root = QHBoxLayout(self)
+        root = QVBoxLayout(self)
         root.setContentsMargins(8, 8, 8, 8)
         root.setSpacing(8)
+        _add_page_header(root, "Freezing Curves", "Cumulative INP spectra per sample, with mean curves and 95% CI")
 
         splitter = QSplitter(Qt.Horizontal)
-        root.addWidget(splitter)
+        root.addWidget(splitter, stretch=1)
 
         left = QWidget()
         left_lay = QVBoxLayout(left)
@@ -3974,10 +4026,10 @@ class FreezingCurvesTab(QWidget):
         self.btn_cancel.clicked.connect(self._cancel_fc_run)
         run_row.addWidget(self.btn_cancel)
 
-        self.size_box = MultiSelectBox("Size")
-        self.dil_box = MultiSelectBox("Dilution.factor")
-        self.loc_box = MultiSelectBox("Location")
-        self.loc_box.list.itemSelectionChanged.connect(self._on_location_selection_changed)
+        self.size_box = ChipMultiSelect("Size")
+        self.dil_box = ChipMultiSelect("Dilution.factor")
+        self.loc_box = ChipMultiSelect("Location")
+        self.loc_box.selectionChanged.connect(self._on_location_selection_changed)
         left_lay.addWidget(self.size_box)
         left_lay.addWidget(self.dil_box)
         left_lay.addWidget(self.loc_box)
@@ -4080,22 +4132,20 @@ class FreezingCurvesTab(QWidget):
         left_lay.addWidget(self.log, stretch=1)
         left_lay.addStretch(1)
 
-        main_panel = QWidget()
+        main_panel = QGroupBox("Freezing curves (nm vs Freezing.temperature)")
+        _apply_card_shadow(main_panel)
         main_panel_lay = QVBoxLayout(main_panel)
-        main_panel_lay.setContentsMargins(0, 0, 0, 0)
         main_panel_lay.setSpacing(6)
         self.main_plot = QWebEngineView()
         self.main_plot.setMinimumHeight(int(self.sp_fc_main_height.value()))
-        main_panel_lay.addWidget(QLabel("Freezing curves (nm vs Freezing.temperature)"))
         main_panel_lay.addWidget(self.main_plot, stretch=1)
 
-        mean_panel = QWidget()
+        mean_panel = QGroupBox("Mean curves ± 95% CI")
+        _apply_card_shadow(mean_panel)
         mean_panel_lay = QVBoxLayout(mean_panel)
-        mean_panel_lay.setContentsMargins(0, 0, 0, 0)
         mean_panel_lay.setSpacing(6)
         self.mean_plot = QWebEngineView()
         self.mean_plot.setMinimumHeight(int(self.sp_fc_mean_height.value()))
-        mean_panel_lay.addWidget(QLabel("Mean curves ± 95% CI"))
         mean_panel_lay.addWidget(self.mean_plot, stretch=1)
 
         right_scroll = _build_vertical_scroll_stack(
@@ -4641,12 +4691,13 @@ class CompareSamplesTab(QWidget):
         self._on_state_changed()
 
     def _build_ui(self) -> None:
-        root = QHBoxLayout(self)
+        root = QVBoxLayout(self)
         root.setContentsMargins(8, 8, 8, 8)
         root.setSpacing(8)
+        _add_page_header(root, "Compare Samples FC", "Overlay freezing curves of different samples on one axis")
 
         splitter = QSplitter(Qt.Horizontal)
-        root.addWidget(splitter)
+        root.addWidget(splitter, stretch=1)
 
         left = QWidget()
         left_lay = QVBoxLayout(left)
@@ -4671,8 +4722,8 @@ class CompareSamplesTab(QWidget):
         run_row.addWidget(self.btn_cancel)
 
         self.sample_box = MultiSelectBox("Sample")
-        self.size_box = MultiSelectBox("Size")
-        self.dil_box = MultiSelectBox("Dilution.factor")
+        self.size_box = ChipMultiSelect("Size")
+        self.dil_box = ChipMultiSelect("Dilution.factor")
         self.sample_box.list.itemSelectionChanged.connect(self._on_sample_selection_changed)
         left_lay.addWidget(self.sample_box)
         left_lay.addWidget(self.size_box)
@@ -4743,11 +4794,10 @@ class CompareSamplesTab(QWidget):
         left_lay.addWidget(self.log, stretch=1)
         left_lay.addStretch(1)
 
-        plot_panel = QWidget()
+        plot_panel = QGroupBox("Compare Samples FC (nm vs Freezing.temperature)")
+        _apply_card_shadow(plot_panel)
         plot_panel_lay = QVBoxLayout(plot_panel)
-        plot_panel_lay.setContentsMargins(0, 0, 0, 0)
         plot_panel_lay.setSpacing(6)
-        plot_panel_lay.addWidget(QLabel("Compare Samples FC (nm vs Freezing.temperature)"))
         self.plot_view = QWebEngineView()
         self.plot_view.setMinimumHeight(460)
         plot_panel_lay.addWidget(self.plot_view, stretch=1)
@@ -5120,12 +5170,13 @@ class FrozenFractionTab(QWidget):
         self._on_state_changed()
 
     def _build_ui(self) -> None:
-        root = QHBoxLayout(self)
+        root = QVBoxLayout(self)
         root.setContentsMargins(8, 8, 8, 8)
         root.setSpacing(8)
+        _add_page_header(root, "Frozen Fraction", "Frozen fraction versus temperature for the selected droplets")
 
         splitter = QSplitter(Qt.Horizontal)
-        root.addWidget(splitter)
+        root.addWidget(splitter, stretch=1)
 
         left = QWidget()
         left_lay = QVBoxLayout(left)
@@ -5150,8 +5201,8 @@ class FrozenFractionTab(QWidget):
         run_row.addWidget(self.btn_cancel)
 
         self.sample_box = MultiSelectBox("Sample")
-        self.size_box = MultiSelectBox("Size")
-        self.dil_box = MultiSelectBox("Dilution.factor")
+        self.size_box = ChipMultiSelect("Size")
+        self.dil_box = ChipMultiSelect("Dilution.factor")
 
         left_lay.addWidget(self.sample_box)
         left_lay.addWidget(self.size_box)
@@ -5251,11 +5302,10 @@ class FrozenFractionTab(QWidget):
         left_lay.addWidget(self.log, stretch=1)
         left_lay.addStretch(1)
 
-        plot_panel = QWidget()
+        plot_panel = QGroupBox("Frozen Fraction (FF vs Freezing.temperature)")
+        _apply_card_shadow(plot_panel)
         plot_panel_lay = QVBoxLayout(plot_panel)
-        plot_panel_lay.setContentsMargins(0, 0, 0, 0)
         plot_panel_lay.setSpacing(6)
-        plot_panel_lay.addWidget(QLabel("Frozen Fraction (FF vs Freezing.temperature)"))
         self.plot_view = QWebEngineView()
         self.plot_view.setMinimumHeight(460)
         plot_panel_lay.addWidget(self.plot_view, stretch=1)
@@ -5666,7 +5716,7 @@ class KneepointSampleEditorDialog(QDialog):
         info.setWordWrap(True)
         left_lay.addWidget(info)
 
-        self.dil_box = MultiSelectBox("Dilution.factor")
+        self.dil_box = ChipMultiSelect("Dilution.factor")
         self.dil_box.set_items(list(dilution_values), select_all=False)
         self.dil_box.set_selected_values(list(initial_dilutions))
         if len(self.dil_box.selected_values()) == 0:
@@ -6024,8 +6074,8 @@ class KneepointTab(QWidget):
 
         left = QWidget()
         left_lay = QVBoxLayout(left)
-        left_lay.setContentsMargins(0, 0, 0, 0)
-        left_lay.setSpacing(10)
+        left_lay.setContentsMargins(2, 2, 2, 2)
+        left_lay.setSpacing(16)
 
         self.lbl_source = QLabel("Source: none")
         self.lbl_source.setWordWrap(True)
@@ -6198,18 +6248,20 @@ class KneepointTab(QWidget):
         report_form.addRow("File prefix", self.in_kp_report_prefix)
         report_lay.addLayout(report_form)
 
-        report_actions = QHBoxLayout()
+        report_actions = QGridLayout()
+        report_actions.setHorizontalSpacing(8)
+        report_actions.setVerticalSpacing(8)
         self.btn_kp_report_create = QPushButton("Build Preview")
         self.btn_kp_report_create.clicked.connect(self._create_kp_report)
-        report_actions.addWidget(self.btn_kp_report_create)
-        self.btn_kp_report_download = QPushButton("Download Report (.zip)")
-        self.btn_kp_report_download.clicked.connect(self._download_kp_report)
-        self.btn_kp_report_download.setEnabled(False)
-        report_actions.addWidget(self.btn_kp_report_download)
+        report_actions.addWidget(self.btn_kp_report_create, 0, 0)
         self.btn_kp_report_cancel = QPushButton("Cancel Report")
         self.btn_kp_report_cancel.clicked.connect(self._cancel_kp_report)
         self.btn_kp_report_cancel.setEnabled(False)
-        report_actions.addWidget(self.btn_kp_report_cancel)
+        report_actions.addWidget(self.btn_kp_report_cancel, 0, 1)
+        self.btn_kp_report_download = QPushButton("Download Report (.zip)")
+        self.btn_kp_report_download.clicked.connect(self._download_kp_report)
+        self.btn_kp_report_download.setEnabled(False)
+        report_actions.addWidget(self.btn_kp_report_download, 1, 0, 1, 2)
         report_lay.addLayout(report_actions)
 
         report_preset_row = QHBoxLayout()
@@ -6250,29 +6302,26 @@ class KneepointTab(QWidget):
         left_lay.addWidget(self.log, stretch=1)
         left_lay.addStretch(1)
 
-        plot_panel = QWidget()
+        plot_panel = QGroupBox("Kneepoint plot (spline + points)")
+        _apply_card_shadow(plot_panel)
         plot_panel_lay = QVBoxLayout(plot_panel)
-        plot_panel_lay.setContentsMargins(0, 0, 0, 0)
         plot_panel_lay.setSpacing(6)
-        plot_panel_lay.addWidget(QLabel("Kneepoint plot (spline + points)"))
         self.plot_view = QWebEngineView()
         self.plot_view.setMinimumHeight(460)
         plot_panel_lay.addWidget(self.plot_view, stretch=1)
 
-        bp_panel = QWidget()
+        bp_panel = QGroupBox("Kneepoint results")
+        _apply_card_shadow(bp_panel)
         bp_panel_lay = QVBoxLayout(bp_panel)
-        bp_panel_lay.setContentsMargins(0, 0, 0, 0)
         bp_panel_lay.setSpacing(6)
-        bp_panel_lay.addWidget(QLabel("Kneepoint results"))
         self.table_bp = QTableWidget()
         self.table_bp.setMinimumHeight(170)
         bp_panel_lay.addWidget(self.table_bp, stretch=1)
 
-        report_preview_panel = QWidget()
+        report_preview_panel = QGroupBox("Report preview (live before download)")
+        _apply_card_shadow(report_preview_panel)
         report_preview_lay = QVBoxLayout(report_preview_panel)
-        report_preview_lay.setContentsMargins(0, 0, 0, 0)
         report_preview_lay.setSpacing(6)
-        report_preview_lay.addWidget(QLabel("Report preview (live before download)"))
         self.lbl_kp_preview_state = QLabel(
             "Build preview from selected samples, then click a sample plot below to open its dedicated editor."
         )
@@ -6300,8 +6349,8 @@ class KneepointTab(QWidget):
         # multiple fixed split panes that can compress and hide content.
         right_content = QWidget()
         right_content_lay = QVBoxLayout(right_content)
-        right_content_lay.setContentsMargins(0, 0, 0, 0)
-        right_content_lay.setSpacing(10)
+        right_content_lay.setContentsMargins(2, 2, 2, 2)
+        right_content_lay.setSpacing(16)
         right_content_lay.addWidget(plot_panel)
         right_content_lay.addWidget(bp_panel)
         right_content_lay.addWidget(report_preview_panel)
@@ -6312,8 +6361,8 @@ class KneepointTab(QWidget):
         left_panel_sticky = _build_sticky_left_panel(
             run_row,
             left,
-            min_width=400,
-            max_width=580,
+            min_width=452,
+            max_width=620,
         )
 
         splitter.addWidget(left_panel_sticky)
@@ -6321,7 +6370,7 @@ class KneepointTab(QWidget):
         splitter.setChildrenCollapsible(False)
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
-        splitter.setSizes([400, 1240])
+        splitter.setSizes([452, 1188])
         self._set_kp_temp_range_enabled()
 
     def _active_curves_table(self) -> LoadedTable | None:
@@ -7819,12 +7868,13 @@ class BoxplotsTab(QWidget):
         return self.state.curves_raw
 
     def _build_ui(self) -> None:
-        root = QHBoxLayout(self)
+        root = QVBoxLayout(self)
         root.setContentsMargins(8, 8, 8, 8)
         root.setSpacing(8)
+        _add_page_header(root, "Boxplots", "Distribution of nM10 / nM15 across the selected grouping")
 
         splitter = QSplitter(Qt.Horizontal)
-        root.addWidget(splitter)
+        root.addWidget(splitter, stretch=1)
 
         left = QWidget()
         left_lay = QVBoxLayout(left)
@@ -7845,7 +7895,8 @@ class BoxplotsTab(QWidget):
         self.btn_cancel.setVisible(True)
         run_row.addWidget(self.btn_cancel)
 
-        form = QFormLayout()
+        sel_box = QGroupBox("Selection")
+        form = QFormLayout(sel_box)
         self.cb_y = QComboBox()
         self.cb_y.addItems(["nM10", "nM15"])
         form.addRow("Response (y)", self.cb_y)
@@ -7856,13 +7907,14 @@ class BoxplotsTab(QWidget):
 
         self.cb_group = QComboBox()
         form.addRow("Group by", self.cb_group)
-        left_lay.addLayout(form)
+        left_lay.addWidget(sel_box)
 
+        bin_box = QGroupBox("Binning")
+        bin_form = QFormLayout(bin_box)
         self.chk_bin = QCheckBox("Bin numeric Group by into ranges")
         self.chk_bin.setChecked(False)
-        left_lay.addWidget(self.chk_bin)
+        bin_form.addRow("", self.chk_bin)
 
-        bin_form = QFormLayout()
         self.cb_bin_mode = QComboBox()
         self.cb_bin_mode.addItems(["count", "width"])
         bin_form.addRow("Range mode", self.cb_bin_mode)
@@ -7872,25 +7924,27 @@ class BoxplotsTab(QWidget):
 
         self.sp_bin_width = SliderNumberInput(min_value=1e-6, max_value=1e6, value=1.0, decimals=3, step=0.1)
         bin_form.addRow("Range width", self.sp_bin_width)
-        left_lay.addLayout(bin_form)
+        left_lay.addWidget(bin_box)
 
-        vis_form = QFormLayout()
+        vis_box = QGroupBox("Points and scale")
+        vis_form = QFormLayout(vis_box)
         self.cb_scale = QComboBox()
         self.cb_scale.addItems(["log10", "linear"])
         vis_form.addRow("Y-axis scale", self.cb_scale)
 
         self.chk_points = QCheckBox("Show points (jitter)")
         self.chk_points.setChecked(True)
-        left_lay.addWidget(self.chk_points)
+        vis_form.addRow("", self.chk_points)
 
         self.sp_stroke = SliderNumberInput(min_value=0.1, max_value=4.0, value=0.9, decimals=2, step=0.05)
         vis_form.addRow("Border width", self.sp_stroke)
 
         self.sp_pt_size = SliderNumberInput(min_value=2, max_value=14, value=5, decimals=0, step=1)
         vis_form.addRow("Point size", self.sp_pt_size)
-        left_lay.addLayout(vis_form)
+        left_lay.addWidget(vis_box)
 
-        style_form = QFormLayout()
+        style_box = QGroupBox("Plot style")
+        style_form = QFormLayout(style_box)
         self.cb_palette = QComboBox()
         _init_palette_combo(self.cb_palette, include_default=True, default_value="set1")
         style_form.addRow("Palette", self.cb_palette)
@@ -7922,7 +7976,7 @@ class BoxplotsTab(QWidget):
         style_form.addRow("Main title", self.in_plot_title)
         self.in_plot_subtitle = QLineEdit("")
         style_form.addRow("Main subtitle", self.in_plot_subtitle)
-        left_lay.addLayout(style_form)
+        left_lay.addWidget(style_box)
 
         self.pb_run = QProgressBar()
         self.pb_run.setRange(0, 100)
@@ -7942,11 +7996,10 @@ class BoxplotsTab(QWidget):
         left_lay.addWidget(self.log, stretch=1)
         left_lay.addStretch(1)
 
-        plot_panel = QWidget()
+        plot_panel = QGroupBox("Boxplots (nM10 / nM15)")
+        _apply_card_shadow(plot_panel)
         plot_lay = QVBoxLayout(plot_panel)
-        plot_lay.setContentsMargins(0, 0, 0, 0)
         plot_lay.setSpacing(6)
-        plot_lay.addWidget(QLabel("Boxplots (nM10 / nM15)"))
         self.plot_view = QWebEngineView()
         self.plot_view.setMinimumHeight(460)
         plot_lay.addWidget(self.plot_view, stretch=1)
@@ -8515,12 +8568,13 @@ class CorrelationsTab(QWidget):
         return self.state.curves_raw
 
     def _build_ui(self) -> None:
-        root = QHBoxLayout(self)
+        root = QVBoxLayout(self)
         root.setContentsMargins(8, 8, 8, 8)
         root.setSpacing(8)
+        _add_page_header(root, "Correlations", "Relationship between metadata variables and nM10 / nM15")
 
         splitter = QSplitter(Qt.Horizontal)
-        root.addWidget(splitter)
+        root.addWidget(splitter, stretch=1)
 
         left = QWidget()
         left_lay = QVBoxLayout(left)
@@ -8541,7 +8595,8 @@ class CorrelationsTab(QWidget):
         self.btn_cancel.setVisible(True)
         run_row.addWidget(self.btn_cancel)
 
-        form = QFormLayout()
+        sel_box = QGroupBox("Selection")
+        form = QFormLayout(sel_box)
         self.cb_method = QComboBox()
         self.cb_method.addItems(["Spearman", "Pearson", "Quadratic Fit", "GAM"])
         form.addRow("Method", self.cb_method)
@@ -8551,21 +8606,23 @@ class CorrelationsTab(QWidget):
 
         self.cb_y = QComboBox()
         form.addRow("Y variable", self.cb_y)
-        left_lay.addLayout(form)
+        left_lay.addWidget(sel_box)
 
-        self.loc_box = MultiSelectBox("Locations")
-        self.loc_box.list.itemSelectionChanged.connect(self._on_location_selection_changed)
+        self.loc_box = ChipMultiSelect("Locations")
+        self.loc_box.selectionChanged.connect(self._on_location_selection_changed)
         left_lay.addWidget(self.loc_box)
 
-        vis = QFormLayout()
+        vis_box = QGroupBox("Points")
+        vis = QFormLayout(vis_box)
         self.sp_pt_size = SliderNumberInput(min_value=2, max_value=14, value=6, decimals=0, step=1)
         vis.addRow("Point size", self.sp_pt_size)
 
         self.sp_stroke = SliderNumberInput(min_value=0.1, max_value=4.0, value=0.3, decimals=2, step=0.05)
         vis.addRow("Border width", self.sp_stroke)
-        left_lay.addLayout(vis)
+        left_lay.addWidget(vis_box)
 
-        style_form = QFormLayout()
+        style_box = QGroupBox("Plot style")
+        style_form = QFormLayout(style_box)
         self.cb_palette = QComboBox()
         _init_palette_combo(self.cb_palette, include_default=True, default_value="set1")
         style_form.addRow("Palette", self.cb_palette)
@@ -8604,7 +8661,7 @@ class CorrelationsTab(QWidget):
 
         self.sp_cor_plot_height = SliderNumberInput(min_value=360, max_value=1200, value=560, decimals=0, step=20)
         style_form.addRow("Plot height", self.sp_cor_plot_height)
-        left_lay.addLayout(style_form)
+        left_lay.addWidget(style_box)
 
         self.shape_group = QGroupBox("Location shapes")
         self.shape_form = QFormLayout(self.shape_group)
@@ -8628,11 +8685,10 @@ class CorrelationsTab(QWidget):
         left_lay.addWidget(self.log, stretch=1)
         left_lay.addStretch(1)
 
-        plot_panel = QWidget()
+        plot_panel = QGroupBox("Correlation Analysis (nM10 / nM15)")
+        _apply_card_shadow(plot_panel)
         plot_lay = QVBoxLayout(plot_panel)
-        plot_lay.setContentsMargins(0, 0, 0, 0)
         plot_lay.setSpacing(6)
-        plot_lay.addWidget(QLabel("Correlation Analysis (nM10 / nM15)"))
         self.plot_view = QWebEngineView()
         self.plot_view.setMinimumHeight(int(self.sp_cor_plot_height.value()))
         plot_lay.addWidget(self.plot_view, stretch=1)
@@ -9691,7 +9747,7 @@ class MainWindow(QMainWindow):
         tabs.tabBar().setUsesScrollButtons(True)
         tabs.tabBar().setElideMode(Qt.ElideRight)
         self.tab_data_upload = DataUploadTab(self.state)
-        tabs.addTab(self.tab_data_upload, "Data Upload & nM")
+        tabs.addTab(self.tab_data_upload, "Data Upload and nM")
         tabs.addTab(FreezingCurvesTab(self.state), "Freezing Curves")
         tabs.addTab(CompareSamplesTab(self.state), "Compare Samples FC")
         tabs.addTab(FrozenFractionTab(self.state), "Frozen Fraction")
@@ -9699,6 +9755,12 @@ class MainWindow(QMainWindow):
         tabs.addTab(BoxplotsTab(self.state), "Boxplots")
         tabs.addTab(CorrelationsTab(self.state), "Correlations")
         self.tabs = tabs
+
+        # Card elevation across every panel of every tab (see _apply_card_shadows_in).
+        for i in range(tabs.count()):
+            page = tabs.widget(i)
+            if isinstance(page, QWidget):
+                _apply_card_shadows_in(page)
 
         corner = QWidget()
         corner.setObjectName("TopBarFrame")

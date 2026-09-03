@@ -31,15 +31,18 @@ QTabBar::tab {
 QTabBar::tab:hover { background: rgba(148, 163, 184, 0.08); color: #e5e7eb; }
 QTabBar::tab:selected { background: rgba(37, 99, 235, 0.18); color: #bcd2ff; font-weight: 600; }
 QGroupBox {
+    background: #111827;
     border: 1px solid #334155;
     border-radius: 12px;
-    margin-top: 12px;
-    padding-top: 10px;
+    margin: 2px;
+    padding: 34px 14px 14px 14px;
 }
 QGroupBox::title {
-    subcontrol-origin: margin;
-    left: 8px;
-    padding: 0 6px;
+    subcontrol-origin: padding;
+    subcontrol-position: top left;
+    left: 14px;
+    top: 12px;
+    padding: 0;
     color: #93c5fd;
     font-weight: 600;
 }
@@ -140,7 +143,23 @@ QPushButton[chipAction="true"] {
     font-weight: 500;
 }
 QPushButton[chipAction="true"]:hover { border-color: #2563eb; color: #bcd2ff; background: rgba(37, 99, 235, 0.12); }
-QGroupBox#FlatGroup { border: none; margin-top: 6px; padding-top: 4px; background: transparent; }
+QGroupBox#FlatGroup { border: none; background: transparent; margin: 0; padding: 22px 0 0 0; }
+QGroupBox#FlatGroup::title { left: 0px; top: 2px; }
+QCheckBox::indicator, QGroupBox::indicator {
+    width: 16px;
+    height: 16px;
+    border-radius: 4px;
+    border: 1px solid #46566e;
+    background: #0b1220;
+}
+QCheckBox::indicator:hover, QGroupBox::indicator:hover { border-color: #2563eb; }
+QCheckBox::indicator:checked, QGroupBox::indicator:checked {
+    background: #2563eb;
+    border: 4px solid #0b1220;
+    outline: 1px solid #2563eb;
+}
+QLabel, QCheckBox, QRadioButton { background: transparent; }
+QWidget#ChipArea { background: transparent; }
 QLabel[caption="true"] { color: #7e90ab; font-size: 11px; }
 QLabel[pageTitle="true"] { color: #eef2f7; font-size: 17px; font-weight: 650; }
 QLabel[pageSubtitle="true"] { color: #93a4bd; font-size: 12px; }
@@ -172,15 +191,18 @@ QTabBar::tab {
 QTabBar::tab:hover { background: rgba(37, 99, 235, 0.06); color: #1d4ed8; }
 QTabBar::tab:selected { background: #e8f0fe; color: #1d4ed8; font-weight: 600; }
 QGroupBox {
+    background: #ffffff;
     border: 1px solid #e2e8f0;
     border-radius: 12px;
-    margin-top: 12px;
-    padding-top: 10px;
+    margin: 2px;
+    padding: 34px 14px 14px 14px;
 }
 QGroupBox::title {
-    subcontrol-origin: margin;
-    left: 8px;
-    padding: 0 6px;
+    subcontrol-origin: padding;
+    subcontrol-position: top left;
+    left: 14px;
+    top: 12px;
+    padding: 0;
     color: #1d4ed8;
     font-weight: 600;
 }
@@ -281,7 +303,23 @@ QPushButton[chipAction="true"] {
     font-weight: 500;
 }
 QPushButton[chipAction="true"]:hover { border-color: #2563eb; color: #1d4ed8; background: rgba(37, 99, 235, 0.08); }
-QGroupBox#FlatGroup { border: none; margin-top: 6px; padding-top: 4px; background: transparent; }
+QGroupBox#FlatGroup { border: none; background: transparent; margin: 0; padding: 22px 0 0 0; }
+QGroupBox#FlatGroup::title { left: 0px; top: 2px; }
+QCheckBox::indicator, QGroupBox::indicator {
+    width: 16px;
+    height: 16px;
+    border-radius: 4px;
+    border: 1px solid #cbd7e6;
+    background: #ffffff;
+}
+QCheckBox::indicator:hover, QGroupBox::indicator:hover { border-color: #2563eb; }
+QCheckBox::indicator:checked, QGroupBox::indicator:checked {
+    background: #2563eb;
+    border: 4px solid #ffffff;
+    outline: 1px solid #2563eb;
+}
+QLabel, QCheckBox, QRadioButton { background: transparent; }
+QWidget#ChipArea { background: transparent; }
 QLabel[caption="true"] { color: #475569; font-size: 11px; }
 QLabel[pageTitle="true"] { color: #0f172a; font-size: 17px; font-weight: 650; }
 QLabel[pageSubtitle="true"] { color: #5b6b82; font-size: 12px; }
@@ -289,7 +327,8 @@ QLabel[pageSubtitle="true"] { color: #5b6b82; font-size: 12px; }
 
 
 APP_STYLESHEET_COMPACT_PATCH = """
-QGroupBox { margin-top: 8px; padding-top: 6px; border-radius: 7px; }
+QGroupBox { padding: 28px 10px 10px 10px; border-radius: 10px; }
+QGroupBox::title { top: 9px; left: 10px; }
 QLineEdit, QTextEdit, QPlainTextEdit, QComboBox, QSpinBox, QDoubleSpinBox {
     min-height: 24px;
     padding: 4px;
@@ -335,7 +374,7 @@ QListWidget {
 }
 QPushButton {
     min-height: 34px;
-    min-width: 118px;
+    min-width: 96px;
 }
 QProgressBar {
     min-height: 18px;
@@ -345,9 +384,6 @@ QTableWidget {
 }
 QHeaderView::section {
     min-height: 26px;
-}
-QGroupBox {
-    padding: 10px 10px 8px 10px;
 }
 """
 
