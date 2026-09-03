@@ -110,6 +110,40 @@ QSlider::handle:horizontal {
     margin: -5px 0;
     border-radius: 8px;
 }
+QPushButton[chip="true"] {
+    background: transparent;
+    border: 1px solid #46566e;
+    border-radius: 13px;
+    color: #93a4bd;
+    padding: 4px 12px;
+    min-height: 22px;
+    max-height: 26px;
+    min-width: 0px;
+    font-weight: 500;
+}
+QPushButton[chip="true"]:hover { border-color: #2563eb; color: #e5e7eb; }
+QPushButton[chip="true"]:checked {
+    background: #2563eb;
+    border-color: #2563eb;
+    color: #ffffff;
+    font-weight: 600;
+}
+QPushButton[chipAction="true"] {
+    background: transparent;
+    border: 1px solid #334155;
+    border-radius: 8px;
+    color: #93a4bd;
+    padding: 4px 10px;
+    min-height: 24px;
+    max-height: 26px;
+    min-width: 0px;
+    font-weight: 500;
+}
+QPushButton[chipAction="true"]:hover { border-color: #2563eb; color: #bcd2ff; background: rgba(37, 99, 235, 0.12); }
+QGroupBox#FlatGroup { border: none; margin-top: 6px; padding-top: 4px; background: transparent; }
+QLabel[caption="true"] { color: #7e90ab; font-size: 11px; }
+QLabel[pageTitle="true"] { color: #eef2f7; font-size: 17px; font-weight: 650; }
+QLabel[pageSubtitle="true"] { color: #93a4bd; font-size: 12px; }
 """
 
 
@@ -217,6 +251,40 @@ QSlider::handle:horizontal {
     margin: -5px 0;
     border-radius: 8px;
 }
+QPushButton[chip="true"] {
+    background: #ffffff;
+    border: 1px solid #cbd7e6;
+    border-radius: 13px;
+    color: #5b6b82;
+    padding: 4px 12px;
+    min-height: 22px;
+    max-height: 26px;
+    min-width: 0px;
+    font-weight: 500;
+}
+QPushButton[chip="true"]:hover { border-color: #2563eb; color: #1d4ed8; }
+QPushButton[chip="true"]:checked {
+    background: #2563eb;
+    border-color: #2563eb;
+    color: #ffffff;
+    font-weight: 600;
+}
+QPushButton[chipAction="true"] {
+    background: transparent;
+    border: 1px solid #cbd7e6;
+    border-radius: 8px;
+    color: #5b6b82;
+    padding: 4px 10px;
+    min-height: 24px;
+    max-height: 26px;
+    min-width: 0px;
+    font-weight: 500;
+}
+QPushButton[chipAction="true"]:hover { border-color: #2563eb; color: #1d4ed8; background: rgba(37, 99, 235, 0.08); }
+QGroupBox#FlatGroup { border: none; margin-top: 6px; padding-top: 4px; background: transparent; }
+QLabel[caption="true"] { color: #475569; font-size: 11px; }
+QLabel[pageTitle="true"] { color: #0f172a; font-size: 17px; font-weight: 650; }
+QLabel[pageSubtitle="true"] { color: #5b6b82; font-size: 12px; }
 """
 
 

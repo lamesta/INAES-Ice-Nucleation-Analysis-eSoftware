@@ -19,7 +19,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-from PySide6.QtCore import Qt, QEvent, QThread, QTimer, QUrl, Signal
+from PySide6.QtCore import Qt, QEvent, QRect, QSize, QThread, QTimer, QUrl, Signal
 from PySide6.QtGui import QColor, QCloseEvent, QDesktopServices, QDoubleValidator, QIntValidator
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import (
@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QFormLayout,
     QFrame,
+    QGraphicsDropShadowEffect,
     QGridLayout,
     QGroupBox,
     QHeaderView,
@@ -1546,6 +1547,15 @@ class SliderNumberInput(QWidget):
         self._sync_label(cur)
 
 
+def _apply_card_shadow(widget: QWidget, *, blur: int = 22, y_offset: int = 5, alpha: int = 70) -> None:
+    """Soft drop-shadow elevation for a 'card' panel (QSS has no box-shadow)."""
+    effect = QGraphicsDropShadowEffect(widget)
+    effect.setBlurRadius(blur)
+    effect.setOffset(0, y_offset)
+    effect.setColor(QColor(0, 0, 0, alpha))
+    widget.setGraphicsEffect(effect)
+
+
 def _make_labeled_slider(
     *,
     min_value: int,
@@ -1682,6 +1692,148 @@ class MultiSelectBox(QGroupBox):
 
     def _update_count(self) -> None:
         self.lbl_count.setText(f"{len(self.selected_values())} selected")
+
+
+class FlowLayout(QLayout):
+    """A wrapping horizontal layout, used for the chip-style multi-select."""
+
+    def __init__(self, parent: QWidget | None = None, margin: int = 0, spacing: int = 6) -> None:
+        super().__init__(parent)
+        self._items: list[Any] = []
+        self._spacing = spacing
+        self.setContentsMargins(margin, margin, margin, margin)
+
+    def addItem(self, item: Any) -> None:
+        self._items.append(item)
+
+    def count(self) -> int:
+        return len(self._items)
+
+    def itemAt(self, index: int) -> Any:
+        return self._items[index] if 0 <= index < len(self._items) else None
+
+    def takeAt(self, index: int) -> Any:
+        return self._items.pop(index) if 0 <= index < len(self._items) else None
+
+    def expandingDirections(self) -> Qt.Orientations:
+        return Qt.Orientations(Qt.Orientation(0))
+
+    def hasHeightForWidth(self) -> bool:
+        return True
+
+    def heightForWidth(self, width: int) -> int:
+        return self._do_layout(QRect(0, 0, width, 0), True)
+
+    def setGeometry(self, rect: QRect) -> None:
+        super().setGeometry(rect)
+        self._do_layout(rect, False)
+
+    def sizeHint(self) -> QSize:
+        return self.minimumSize()
+
+    def minimumSize(self) -> QSize:
+        size = QSize()
+        for item in self._items:
+            size = size.expandedTo(item.minimumSize())
+        m = self.contentsMargins()
+        size += QSize(m.left() + m.right(), m.top() + m.bottom())
+        return size
+
+    def _do_layout(self, rect: QRect, test_only: bool) -> int:
+        m = self.contentsMargins()
+        effective = rect.adjusted(m.left(), m.top(), -m.right(), -m.bottom())
+        x, y = effective.x(), effective.y()
+        line_height = 0
+        for item in self._items:
+            hint = item.sizeHint()
+            next_x = x + hint.width() + self._spacing
+            if next_x - self._spacing > effective.right() and line_height > 0:
+                x = effective.x()
+                y = y + line_height + self._spacing
+                next_x = x + hint.width() + self._spacing
+                line_height = 0
+            if not test_only:
+                item.setGeometry(QRect(x, y, hint.width(), hint.height()))
+            x = next_x
+            line_height = max(line_height, hint.height())
+        return y + line_height - rect.y()
+
+
+class ChipMultiSelect(QGroupBox):
+    """Pill-chip multi-select, API-compatible with MultiSelectBox (set_items,
+    values, selected_values, set_selected_values, select_all, clear_selection)."""
+
+    selectionChanged = Signal()
+
+    def __init__(self, title: str, parent: QWidget | None = None) -> None:
+        super().__init__(title, parent)
+        self.setProperty("card", True)
+        lay = QVBoxLayout(self)
+        top = QHBoxLayout()
+        self.btn_all = QPushButton("Select all")
+        self.btn_none = QPushButton("Clear")
+        for b in (self.btn_all, self.btn_none):
+            b.setProperty("chipAction", True)
+        top.addWidget(self.btn_all)
+        top.addWidget(self.btn_none)
+        top.addStretch(1)
+        lay.addLayout(top)
+
+        self._chip_area = QWidget()
+        self._flow = FlowLayout(self._chip_area, margin=0, spacing=6)
+        lay.addWidget(self._chip_area)
+
+        self.lbl_count = QLabel("0 selected")
+        self.lbl_count.setProperty("caption", True)
+        lay.addWidget(self.lbl_count)
+
+        self.btn_all.clicked.connect(self.select_all)
+        self.btn_none.clicked.connect(self.clear_selection)
+        self._chips: list[tuple[Any, QPushButton]] = []
+
+    def set_items(self, values: list[Any], select_all: bool = True) -> None:
+        for _, btn in self._chips:
+            btn.setParent(None)
+            btn.deleteLater()
+        self._chips = []
+        for v in values:
+            btn = QPushButton(str(v))
+            btn.setCheckable(True)
+            btn.setProperty("chip", True)
+            btn.setChecked(bool(select_all))
+            btn.toggled.connect(self._on_toggled)
+            self._flow.addWidget(btn)
+            self._chips.append((v, btn))
+        self._update_count()
+
+    def values(self) -> list[Any]:
+        return [v for v, _ in self._chips]
+
+    def selected_values(self) -> list[Any]:
+        return [v for v, btn in self._chips if btn.isChecked()]
+
+    def select_all(self) -> None:
+        for _, btn in self._chips:
+            btn.setChecked(True)
+        self._update_count()
+
+    def clear_selection(self) -> None:
+        for _, btn in self._chips:
+            btn.setChecked(False)
+        self._update_count()
+
+    def set_selected_values(self, values: list[Any]) -> None:
+        wanted = {str(v) for v in (values or [])}
+        for v, btn in self._chips:
+            btn.setChecked(str(v) in wanted)
+        self._update_count()
+
+    def _on_toggled(self, _checked: bool) -> None:
+        self._update_count()
+
+    def _update_count(self) -> None:
+        self.lbl_count.setText(f"{len(self.selected_values())} selected")
+        self.selectionChanged.emit()
 
 
 class DataUploadTab(QWidget):
@@ -5853,12 +6005,22 @@ class KneepointTab(QWidget):
         self._on_state_changed()
 
     def _build_ui(self) -> None:
-        root = QHBoxLayout(self)
+        root = QVBoxLayout(self)
         root.setContentsMargins(8, 8, 8, 8)
         root.setSpacing(8)
 
+        header = QVBoxLayout()
+        header.setSpacing(2)
+        title = QLabel("Kneepoint Analysis")
+        title.setProperty("pageTitle", True)
+        header.addWidget(title)
+        subtitle = QLabel("Detect regime-change breakpoints on the smoothed freezing curve")
+        subtitle.setProperty("pageSubtitle", True)
+        header.addWidget(subtitle)
+        root.addLayout(header)
+
         splitter = QSplitter(Qt.Horizontal)
-        root.addWidget(splitter)
+        root.addWidget(splitter, stretch=1)
 
         left = QWidget()
         left_lay = QVBoxLayout(left)
@@ -5882,6 +6044,10 @@ class KneepointTab(QWidget):
         self.btn_cancel.clicked.connect(self._cancel_kp_run)
         run_row.addWidget(self.btn_cancel)
 
+        sel_box = QGroupBox("Selection")
+        sel_lay = QVBoxLayout(sel_box)
+        _apply_card_shadow(sel_box)
+
         self.cb_sample = QComboBox()
         self.cb_size = QComboBox()
         form_top = QFormLayout()
@@ -5890,12 +6056,15 @@ class KneepointTab(QWidget):
         form_top.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         form_top.addRow("Sample", self.cb_sample)
         form_top.addRow("Size", self.cb_size)
-        left_lay.addLayout(form_top)
+        sel_lay.addLayout(form_top)
 
-        self.dil_box = MultiSelectBox("Dilution.factor")
-        left_lay.addWidget(self.dil_box)
+        self.dil_box = ChipMultiSelect("Dilution.factor")
+        self.dil_box.setObjectName("FlatGroup")
+        sel_lay.addWidget(self.dil_box)
+        left_lay.addWidget(sel_box)
 
         temp_box = QGroupBox("Temperature range (°C)")
+        _apply_card_shadow(temp_box)
         temp_lay = QFormLayout(temp_box)
         temp_lay.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
         temp_lay.setRowWrapPolicy(QFormLayout.WrapLongRows)
@@ -5911,6 +6080,7 @@ class KneepointTab(QWidget):
         left_lay.addWidget(temp_box)
 
         cfg_box = QGroupBox("Kneepoint settings")
+        _apply_card_shadow(cfg_box)
         cfg_lay = QFormLayout(cfg_box)
         cfg_lay.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
         cfg_lay.setRowWrapPolicy(QFormLayout.WrapLongRows)

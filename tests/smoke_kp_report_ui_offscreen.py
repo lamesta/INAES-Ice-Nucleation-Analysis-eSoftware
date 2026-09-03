@@ -143,7 +143,7 @@ def main() -> int:
         raise SystemExit("Kneepoint report sample list is empty.")
     if int(getattr(kp_tab.cb_size, "count", lambda: 0)()) <= 0:
         raise SystemExit("Kneepoint report UI: no size options available.")
-    if hasattr(kp_tab, "dil_box") and int(getattr(kp_tab.dil_box.list, "count", lambda: 0)()) > 0:
+    if hasattr(kp_tab, "dil_box") and len(kp_tab.dil_box.values()) > 0:
         kp_tab.dil_box.select_all()
     sample_name, size_name = _pick_valid_sample_size(kp_tab, win.state.curves_standardized.df)
 
