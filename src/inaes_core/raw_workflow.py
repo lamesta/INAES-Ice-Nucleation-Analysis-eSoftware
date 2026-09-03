@@ -28,6 +28,7 @@ RAW_VALI_METHOD_OPTIONS: list[tuple[str, str]] = [
     ("Surface-site density n_s(T) (direct area/drop)", "surface_area_direct"),
     ("Surface-site density n_s,BET(T) (from nM + BET area)", "surface_area_bet_from_mass"),
     ("Per-cell cumulative metric", "cell_concentration"),
+    ("Fungal biomass N_m (per gram of mycelium)", "fungal_biomass_nm"),
     ("Air-volume INP (filter wash-off)", "air_washoff"),
     ("Air-volume INP (filter drop-on)", "air_drop_on"),
     ("Custom dose-per-droplet X (generic nX = Λ/X)", "custom_dose"),
@@ -40,6 +41,11 @@ RAW_VALI_METHOD_HELP: dict[str, str] = {
     "surface_area_direct": "n_s(T) = -ln(1-FF) / A_per_droplet.",
     "surface_area_bet_from_mass": "n_s,BET = nM / theta (BET area).",
     "cell_concentration": "n_cell(T) = -(1/V) ln(1-FF) * (d / c_cells).",
+    "fungal_biomass_nm": (
+        "N_m(T) = [-ln(1-FF) / Vdrop] * (Vwash / m) * d, with m the fresh mycelium mass, "
+        "Vwash the mother-suspension volume and d the dilution factor of the droplet series "
+        "relative to the mother suspension (TINA scheme, Kunert et al.)."
+    ),
     "air_washoff": "N_INP = -ln(1-FF) * (Vwash / (Vdrop * x * Vs)).",
     "air_drop_on": "N_INP = -ln(1-FF) * (A_filter / (alpha * Vs)).",
     "custom_dose": "nX(T) = -ln(1-FF) / X.",
@@ -52,6 +58,7 @@ RAW_VALI_METHOD_AXIS_META: dict[str, dict[str, str]] = {
     "surface_area_direct": {"label": "n_s", "units": "m^-2"},
     "surface_area_bet_from_mass": {"label": "n_s,BET", "units": "m^-2"},
     "cell_concentration": {"label": "n_cell", "units": "cell^-1"},
+    "fungal_biomass_nm": {"label": "N_m", "units": "g^-1"},
     "air_washoff": {"label": "N_INP_air", "units": "L^-1"},
     "air_drop_on": {"label": "N_INP_air", "units": "L^-1"},
     "custom_dose": {"label": "nX", "units": "X^-1"},
@@ -516,6 +523,14 @@ def _compute_raw_vali_normalized_df(df_std: pd.DataFrame, cfg: RawAnalyzeConfig)
         c_cell = _safe_float(cfg.cell_conc_per_ml, name="Cell concentration (cells/mL)", positive=True)
         x_cells = (c_cell / dil) * v_drop_ml
         return _finalize(lam / x_cells, label="n_cell", units="cell^-1")
+    if m == "fungal_biomass_nm":
+        # TINA scheme (Kunert et al.): the droplet represents a volume of the mother
+        # suspension that is smaller by the dilution factor d, so the count is scaled
+        # back to the biological unit (per gram of fresh mycelium) by d * (Vwash / m).
+        v_wash_ml = _safe_float(cfg.wash_volume_ml, name="Suspension volume V_wash (mL)", positive=True)
+        mycelium_mass_g = _safe_float(cfg.sample_mass_g, name="Mycelium mass m (g)", positive=True)
+        nm_scale = (v_wash_ml / mycelium_mass_g) * dil / v_drop_ml
+        return _finalize(lam * nm_scale, label="N_m", units="g^-1")
     if m == "air_washoff":
         v_wash_ml = _safe_float(cfg.wash_volume_ml, name="Wash volume (mL)", positive=True)
         x_frac = _safe_float(cfg.air_filter_fraction_x, name="Filter fraction x", positive=True)
