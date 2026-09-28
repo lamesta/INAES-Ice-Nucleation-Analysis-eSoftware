@@ -1555,8 +1555,21 @@ class SliderNumberInput(QWidget):
         self._sync_label(cur)
 
 
+def _hosts_plots(widget: QWidget) -> bool:
+    """True if `widget` hosts (or is marked to host) an interactive web plot."""
+    return bool(widget.property("noShadow")) or bool(widget.findChildren(QWebEngineView))
+
+
 def _apply_card_shadow(widget: QWidget, *, blur: int = 14, y_offset: int = 3, alpha: int = 38) -> None:
-    """Soft drop-shadow elevation for a 'card' panel (QSS has no box-shadow)."""
+    """Soft drop-shadow elevation for a 'card' panel (QSS has no box-shadow).
+
+    Never applied to a container of a QWebEngineView: a QGraphicsEffect on any
+    ancestor makes Qt paint the web view through a cached offscreen pixmap, so
+    Plotly zoom/pan/hover no longer update on screen and a freshly loaded plot
+    stays invisible until something else forces a repaint.
+    """
+    if _hosts_plots(widget):
+        return
     effect = QGraphicsDropShadowEffect(widget)
     effect.setBlurRadius(blur)
     effect.setOffset(0, y_offset)
@@ -1575,6 +1588,8 @@ def _apply_card_shadows_in(root: QWidget) -> int:
         if box.graphicsEffect() is not None:
             continue
         if str(box.objectName()) == "FlatGroup":
+            continue
+        if _hosts_plots(box):
             continue
         parent = box.parentWidget()
         nested = False
@@ -4133,7 +4148,7 @@ class FreezingCurvesTab(QWidget):
         left_lay.addStretch(1)
 
         main_panel = QGroupBox("Freezing curves (nm vs Freezing.temperature)")
-        _apply_card_shadow(main_panel)
+        main_panel.setProperty("noShadow", True)  # hosts plots: no QGraphicsEffect
         main_panel_lay = QVBoxLayout(main_panel)
         main_panel_lay.setSpacing(6)
         self.main_plot = QWebEngineView()
@@ -4141,7 +4156,7 @@ class FreezingCurvesTab(QWidget):
         main_panel_lay.addWidget(self.main_plot, stretch=1)
 
         mean_panel = QGroupBox("Mean curves ± 95% CI")
-        _apply_card_shadow(mean_panel)
+        mean_panel.setProperty("noShadow", True)  # hosts plots: no QGraphicsEffect
         mean_panel_lay = QVBoxLayout(mean_panel)
         mean_panel_lay.setSpacing(6)
         self.mean_plot = QWebEngineView()
@@ -4795,7 +4810,7 @@ class CompareSamplesTab(QWidget):
         left_lay.addStretch(1)
 
         plot_panel = QGroupBox("Compare Samples FC (nm vs Freezing.temperature)")
-        _apply_card_shadow(plot_panel)
+        plot_panel.setProperty("noShadow", True)  # hosts plots: no QGraphicsEffect
         plot_panel_lay = QVBoxLayout(plot_panel)
         plot_panel_lay.setSpacing(6)
         self.plot_view = QWebEngineView()
@@ -5303,7 +5318,7 @@ class FrozenFractionTab(QWidget):
         left_lay.addStretch(1)
 
         plot_panel = QGroupBox("Frozen Fraction (FF vs Freezing.temperature)")
-        _apply_card_shadow(plot_panel)
+        plot_panel.setProperty("noShadow", True)  # hosts plots: no QGraphicsEffect
         plot_panel_lay = QVBoxLayout(plot_panel)
         plot_panel_lay.setSpacing(6)
         self.plot_view = QWebEngineView()
@@ -6303,7 +6318,7 @@ class KneepointTab(QWidget):
         left_lay.addStretch(1)
 
         plot_panel = QGroupBox("Kneepoint plot (spline + points)")
-        _apply_card_shadow(plot_panel)
+        plot_panel.setProperty("noShadow", True)  # hosts plots: no QGraphicsEffect
         plot_panel_lay = QVBoxLayout(plot_panel)
         plot_panel_lay.setSpacing(6)
         self.plot_view = QWebEngineView()
@@ -6311,7 +6326,7 @@ class KneepointTab(QWidget):
         plot_panel_lay.addWidget(self.plot_view, stretch=1)
 
         bp_panel = QGroupBox("Kneepoint results")
-        _apply_card_shadow(bp_panel)
+        bp_panel.setProperty("noShadow", True)  # hosts plots: no QGraphicsEffect
         bp_panel_lay = QVBoxLayout(bp_panel)
         bp_panel_lay.setSpacing(6)
         self.table_bp = QTableWidget()
@@ -6319,7 +6334,7 @@ class KneepointTab(QWidget):
         bp_panel_lay.addWidget(self.table_bp, stretch=1)
 
         report_preview_panel = QGroupBox("Report preview (live before download)")
-        _apply_card_shadow(report_preview_panel)
+        report_preview_panel.setProperty("noShadow", True)  # hosts plots: no QGraphicsEffect
         report_preview_lay = QVBoxLayout(report_preview_panel)
         report_preview_lay.setSpacing(6)
         self.lbl_kp_preview_state = QLabel(
@@ -7997,7 +8012,7 @@ class BoxplotsTab(QWidget):
         left_lay.addStretch(1)
 
         plot_panel = QGroupBox("Boxplots (nM10 / nM15)")
-        _apply_card_shadow(plot_panel)
+        plot_panel.setProperty("noShadow", True)  # hosts plots: no QGraphicsEffect
         plot_lay = QVBoxLayout(plot_panel)
         plot_lay.setSpacing(6)
         self.plot_view = QWebEngineView()
@@ -8686,7 +8701,7 @@ class CorrelationsTab(QWidget):
         left_lay.addStretch(1)
 
         plot_panel = QGroupBox("Correlation Analysis (nM10 / nM15)")
-        _apply_card_shadow(plot_panel)
+        plot_panel.setProperty("noShadow", True)  # hosts plots: no QGraphicsEffect
         plot_lay = QVBoxLayout(plot_panel)
         plot_lay.setSpacing(6)
         self.plot_view = QWebEngineView()
