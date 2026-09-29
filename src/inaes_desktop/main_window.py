@@ -31,7 +31,6 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QFormLayout,
     QFrame,
-    QGraphicsDropShadowEffect,
     QGridLayout,
     QGroupBox,
     QHeaderView,
@@ -1206,6 +1205,10 @@ def _compute_kneepoint_payload(
             boot_R=200,
             cv_k=5,
         )
+    except ValueError:
+        # Expected validation errors (e.g. "Not enough points after filtering"):
+        # keep the plain one-line message the user always saw.
+        raise
     except Exception as exc:
         raise RuntimeError(
             f"Kneepoint analysis failed for sample={sample!r} size={size!r} "
@@ -1222,6 +1225,8 @@ def _compute_kneepoint_payload(
             temp_min=temp_min,
             temp_max=temp_max,
         )
+    except ValueError:
+        raise
     except Exception as exc:
         raise RuntimeError(
             f"Kneepoint point filtering failed for sample={sample!r} size={size!r}: "
@@ -1318,6 +1323,19 @@ def _compute_raw_merge_payload(
     progress(90, "Finalizing merged table...")
     return {"df": merged, "status": str(status)}
 
+
+# Parameter field labels that differ from the generic ones for a given method.
+# Methods not listed here keep the generic labels unchanged.
+RAW_PARAM_DEFAULT_LABELS: dict[str, str] = {
+    "wash_volume": "Water/Wash volume (mL)",
+    "sample_mass": "Sample/Soil mass (g)",
+}
+RAW_PARAM_LABEL_OVERRIDES: dict[str, dict[str, str]] = {
+    "fungal_biomass_nm": {
+        "wash_volume": "Suspension volume V_wash (mL)",
+        "sample_mass": "Mycelium fresh mass m (g)",
+    },
+}
 
 RAW_METHOD_REQUIRED_PARAMS: dict[str, set[str]] = {
     "mass_concentration_nm": {"mass_conc"},
@@ -1553,56 +1571,6 @@ class SliderNumberInput(QWidget):
         self._slider.setValue(cur)
         self._slider.blockSignals(False)
         self._sync_label(cur)
-
-
-def _hosts_plots(widget: QWidget) -> bool:
-    """True if `widget` hosts (or is marked to host) an interactive web plot."""
-    return bool(widget.property("noShadow")) or bool(widget.findChildren(QWebEngineView))
-
-
-def _apply_card_shadow(widget: QWidget, *, blur: int = 14, y_offset: int = 3, alpha: int = 38) -> None:
-    """Soft drop-shadow elevation for a 'card' panel (QSS has no box-shadow).
-
-    Never applied to a container of a QWebEngineView: a QGraphicsEffect on any
-    ancestor makes Qt paint the web view through a cached offscreen pixmap, so
-    Plotly zoom/pan/hover no longer update on screen and a freshly loaded plot
-    stays invisible until something else forces a repaint.
-    """
-    if _hosts_plots(widget):
-        return
-    effect = QGraphicsDropShadowEffect(widget)
-    effect.setBlurRadius(blur)
-    effect.setOffset(0, y_offset)
-    effect.setColor(QColor(0, 0, 0, alpha))
-    widget.setGraphicsEffect(effect)
-
-
-def _apply_card_shadows_in(root: QWidget) -> int:
-    """Give every top-level group box in `root` the card elevation.
-
-    Nested group boxes are skipped so cards never stack two shadows, and boxes
-    that already carry an effect (set explicitly at build time) are left alone.
-    """
-    count = 0
-    for box in root.findChildren(QGroupBox):
-        if box.graphicsEffect() is not None:
-            continue
-        if str(box.objectName()) == "FlatGroup":
-            continue
-        if _hosts_plots(box):
-            continue
-        parent = box.parentWidget()
-        nested = False
-        while parent is not None and parent is not root:
-            if isinstance(parent, QGroupBox):
-                nested = True
-                break
-            parent = parent.parentWidget()
-        if nested:
-            continue
-        _apply_card_shadow(box)
-        count += 1
-    return count
 
 
 def _add_page_header(layout: QLayout, title: str, subtitle: str) -> None:
@@ -2872,6 +2840,12 @@ class DataUploadTab(QWidget):
             if label_widget is not None:
                 label_widget.setVisible(bool(enabled))
             self._set_param_widget_style(widget, enabled=enabled, required=req)
+        if hasattr(self, "raw_method_form"):
+            overrides = RAW_PARAM_LABEL_OVERRIDES.get(method, {})
+            for key, default_text in RAW_PARAM_DEFAULT_LABELS.items():
+                label_widget = self.raw_method_form.labelForField(widgets[key])
+                if isinstance(label_widget, QLabel):
+                    label_widget.setText(overrides.get(key, default_text))
         pretty_formula = _method_formula_html(method)
         if pretty_formula:
             self.lbl_raw_method_help.setText(
@@ -4148,7 +4122,6 @@ class FreezingCurvesTab(QWidget):
         left_lay.addStretch(1)
 
         main_panel = QGroupBox("Freezing curves (nm vs Freezing.temperature)")
-        main_panel.setProperty("noShadow", True)  # hosts plots: no QGraphicsEffect
         main_panel_lay = QVBoxLayout(main_panel)
         main_panel_lay.setSpacing(6)
         self.main_plot = QWebEngineView()
@@ -4156,7 +4129,6 @@ class FreezingCurvesTab(QWidget):
         main_panel_lay.addWidget(self.main_plot, stretch=1)
 
         mean_panel = QGroupBox("Mean curves ± 95% CI")
-        mean_panel.setProperty("noShadow", True)  # hosts plots: no QGraphicsEffect
         mean_panel_lay = QVBoxLayout(mean_panel)
         mean_panel_lay.setSpacing(6)
         self.mean_plot = QWebEngineView()
@@ -4810,7 +4782,6 @@ class CompareSamplesTab(QWidget):
         left_lay.addStretch(1)
 
         plot_panel = QGroupBox("Compare Samples FC (nm vs Freezing.temperature)")
-        plot_panel.setProperty("noShadow", True)  # hosts plots: no QGraphicsEffect
         plot_panel_lay = QVBoxLayout(plot_panel)
         plot_panel_lay.setSpacing(6)
         self.plot_view = QWebEngineView()
@@ -5318,7 +5289,6 @@ class FrozenFractionTab(QWidget):
         left_lay.addStretch(1)
 
         plot_panel = QGroupBox("Frozen Fraction (FF vs Freezing.temperature)")
-        plot_panel.setProperty("noShadow", True)  # hosts plots: no QGraphicsEffect
         plot_panel_lay = QVBoxLayout(plot_panel)
         plot_panel_lay.setSpacing(6)
         self.plot_view = QWebEngineView()
@@ -6111,7 +6081,6 @@ class KneepointTab(QWidget):
 
         sel_box = QGroupBox("Selection")
         sel_lay = QVBoxLayout(sel_box)
-        _apply_card_shadow(sel_box)
 
         self.cb_sample = QComboBox()
         self.cb_size = QComboBox()
@@ -6129,7 +6098,6 @@ class KneepointTab(QWidget):
         left_lay.addWidget(sel_box)
 
         temp_box = QGroupBox("Temperature range (°C)")
-        _apply_card_shadow(temp_box)
         temp_lay = QFormLayout(temp_box)
         temp_lay.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
         temp_lay.setRowWrapPolicy(QFormLayout.WrapLongRows)
@@ -6145,7 +6113,6 @@ class KneepointTab(QWidget):
         left_lay.addWidget(temp_box)
 
         cfg_box = QGroupBox("Kneepoint settings")
-        _apply_card_shadow(cfg_box)
         cfg_lay = QFormLayout(cfg_box)
         cfg_lay.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
         cfg_lay.setRowWrapPolicy(QFormLayout.WrapLongRows)
@@ -6318,7 +6285,6 @@ class KneepointTab(QWidget):
         left_lay.addStretch(1)
 
         plot_panel = QGroupBox("Kneepoint plot (spline + points)")
-        plot_panel.setProperty("noShadow", True)  # hosts plots: no QGraphicsEffect
         plot_panel_lay = QVBoxLayout(plot_panel)
         plot_panel_lay.setSpacing(6)
         self.plot_view = QWebEngineView()
@@ -6326,7 +6292,6 @@ class KneepointTab(QWidget):
         plot_panel_lay.addWidget(self.plot_view, stretch=1)
 
         bp_panel = QGroupBox("Kneepoint results")
-        bp_panel.setProperty("noShadow", True)  # hosts plots: no QGraphicsEffect
         bp_panel_lay = QVBoxLayout(bp_panel)
         bp_panel_lay.setSpacing(6)
         self.table_bp = QTableWidget()
@@ -6334,7 +6299,6 @@ class KneepointTab(QWidget):
         bp_panel_lay.addWidget(self.table_bp, stretch=1)
 
         report_preview_panel = QGroupBox("Report preview (live before download)")
-        report_preview_panel.setProperty("noShadow", True)  # hosts plots: no QGraphicsEffect
         report_preview_lay = QVBoxLayout(report_preview_panel)
         report_preview_lay.setSpacing(6)
         self.lbl_kp_preview_state = QLabel(
@@ -7627,7 +7591,9 @@ class KneepointTab(QWidget):
     def _on_kp_failed(self, msg: str) -> None:
         txt = str(msg or "Unknown error.")
         self.pb_run.setValue(0)
-        self.lbl_status.setText(f"Status: ERROR | {txt}")
+        # Status line gets the one-line summary; any traceback goes to the log only.
+        first_line = txt.splitlines()[0] if txt.strip() else "Unknown error."
+        self.lbl_status.setText(f"Status: ERROR | {first_line}")
         self.log.append(f"[kp] ERROR: {txt}")
         self._clear_kp_outputs()
 
@@ -8012,7 +7978,6 @@ class BoxplotsTab(QWidget):
         left_lay.addStretch(1)
 
         plot_panel = QGroupBox("Boxplots (nM10 / nM15)")
-        plot_panel.setProperty("noShadow", True)  # hosts plots: no QGraphicsEffect
         plot_lay = QVBoxLayout(plot_panel)
         plot_lay.setSpacing(6)
         self.plot_view = QWebEngineView()
@@ -8701,7 +8666,6 @@ class CorrelationsTab(QWidget):
         left_lay.addStretch(1)
 
         plot_panel = QGroupBox("Correlation Analysis (nM10 / nM15)")
-        plot_panel.setProperty("noShadow", True)  # hosts plots: no QGraphicsEffect
         plot_lay = QVBoxLayout(plot_panel)
         plot_lay.setSpacing(6)
         self.plot_view = QWebEngineView()
@@ -9771,11 +9735,6 @@ class MainWindow(QMainWindow):
         tabs.addTab(CorrelationsTab(self.state), "Correlations")
         self.tabs = tabs
 
-        # Card elevation across every panel of every tab (see _apply_card_shadows_in).
-        for i in range(tabs.count()):
-            page = tabs.widget(i)
-            if isinstance(page, QWidget):
-                _apply_card_shadows_in(page)
 
         corner = QWidget()
         corner.setObjectName("TopBarFrame")

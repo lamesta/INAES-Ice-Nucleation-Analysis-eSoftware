@@ -683,9 +683,6 @@ def kneepoint_analysis(
         idx = rng.integers(0, len(x), size=len(x))
         xb = x[idx]
         yb = y[idx]
-        order = np.argsort(xb, kind="stable")
-        xb = xb[order]
-        yb = yb[order]
         try:
             spline_b = UnivariateSpline(xb, yb, s=_map_spar_to_s(xb, yb, float(spar)))
             yb_grid = spline_b(x_grid)
