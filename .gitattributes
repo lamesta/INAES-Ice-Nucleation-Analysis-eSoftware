@@ -10,3 +10,7 @@ docs/** linguist-documentation
 packaging/** linguist-vendored
 scripts/*.bat linguist-vendored
 scripts/*.ps1 linguist-vendored
+
+# PDFs written by ReportLab are pure ASCII; without this, Windows checkouts convert
+# their line endings to CRLF and corrupt the internal byte offsets.
+*.pdf binary
