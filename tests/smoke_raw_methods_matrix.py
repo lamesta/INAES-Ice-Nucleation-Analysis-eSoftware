@@ -61,6 +61,9 @@ def main() -> int:
         "air_washoff": dict(wash_volume_ml=20.0, air_filter_fraction_x=0.1, air_sampled_volume_L=200.0),
         "air_drop_on": dict(air_sampled_volume_L=200.0, filter_exposed_area=1.0, droplet_footprint_area=0.01),
         "custom_dose": dict(custom_dose_per_drop=0.5),
+        "protein_molecules_nn": dict(
+            protein_input_mode="mass", protein_mass_conc_mg_per_ml=1.0, protein_molar_mass_kda=100.0
+        ),
     }
 
     for _label, method in RAW_VALI_METHOD_OPTIONS:

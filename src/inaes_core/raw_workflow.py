@@ -29,6 +29,7 @@ RAW_VALI_METHOD_OPTIONS: list[tuple[str, str]] = [
     ("Surface-site density n_s,BET(T) (from nM + BET area)", "surface_area_bet_from_mass"),
     ("Per-cell cumulative metric", "cell_concentration"),
     ("Fungal biomass N_m (per gram of mycelium)", "fungal_biomass_nm"),
+    ("Purified protein N_n (per molecule)", "protein_molecules_nn"),
     ("Air-volume INP (filter wash-off)", "air_washoff"),
     ("Air-volume INP (filter drop-on)", "air_drop_on"),
     ("Custom dose-per-droplet X (generic nX = Λ/X)", "custom_dose"),
@@ -46,6 +47,12 @@ RAW_VALI_METHOD_HELP: dict[str, str] = {
         "Vwash the mother-suspension volume and d the dilution factor of the droplet series "
         "relative to the mother suspension (TINA scheme, Kunert et al.)."
     ),
+    "protein_molecules_nn": (
+        "N_n(T) = -ln(1-FF) * d / N_drop, with N_drop the protein molecules per droplet of the undiluted "
+        "solution: N_drop = (c_m / M) * Vdrop * N_A (mass concentration c_m + molar mass M) or "
+        "N_drop = c_mol * Vdrop * N_A (molar concentration). Ice nucleation site density per molecule "
+        "(Hartmann et al. 2022, Front. Microbiol. 13:872306)."
+    ),
     "air_washoff": "N_INP = -ln(1-FF) * (Vwash / (Vdrop * x * Vs)).",
     "air_drop_on": "N_INP = -ln(1-FF) * (A_filter / (alpha * Vs)).",
     "custom_dose": "nX(T) = -ln(1-FF) / X.",
@@ -59,6 +66,7 @@ RAW_VALI_METHOD_AXIS_META: dict[str, dict[str, str]] = {
     "surface_area_bet_from_mass": {"label": "n_s,BET", "units": "m^-2"},
     "cell_concentration": {"label": "n_cell", "units": "cell^-1"},
     "fungal_biomass_nm": {"label": "N_m", "units": "g^-1"},
+    "protein_molecules_nn": {"label": "N_n", "units": "molecule^-1"},
     "air_washoff": {"label": "N_INP_air", "units": "L^-1"},
     "air_drop_on": {"label": "N_INP_air", "units": "L^-1"},
     "custom_dose": {"label": "nX", "units": "X^-1"},
@@ -142,6 +150,13 @@ class RawAnalyzeConfig:
     filter_exposed_area: Any = None
     droplet_footprint_area: Any = None
     custom_dose_per_drop: Any = None
+    protein_input_mode: Any = "mass"
+    protein_mass_conc_mg_per_ml: Any = None
+    protein_molar_mass_kda: Any = None
+    protein_molar_conc_um: Any = None
+
+
+AVOGADRO_PER_MOL = 6.02214076e23
 
 
 def _raw_aliases() -> dict[str, list[str]]:
@@ -431,7 +446,9 @@ def _compute_raw_vali_normalized_df(df_std: pd.DataFrame, cfg: RawAnalyzeConfig)
     df["Dilution.factor"] = dil
     df["Dilution"] = dil
 
-    def _finalize(metric: pd.Series, *, label: str, units: str) -> tuple[pd.DataFrame, dict[str, Any]]:
+    def _finalize(
+        metric: pd.Series, *, label: str, units: str, extra_note: str = ""
+    ) -> tuple[pd.DataFrame, dict[str, Any]]:
         n = len(df)
         out = pd.DataFrame(index=df.index)
         out["Sample.name"] = (
@@ -495,6 +512,7 @@ def _compute_raw_vali_normalized_df(df_std: pd.DataFrame, cfg: RawAnalyzeConfig)
             "droplet_volume_ul": v_drop_ul,
             "warnings": ff_warnings,
             "method_note": RAW_VALI_METHOD_HELP.get(m, ""),
+            "extra_note": str(extra_note or ""),
         }
         return out, meta
 
@@ -531,6 +549,25 @@ def _compute_raw_vali_normalized_df(df_std: pd.DataFrame, cfg: RawAnalyzeConfig)
         mycelium_mass_g = _safe_float(cfg.sample_mass_g, name="Mycelium mass m (g)", positive=True)
         nm_scale = (v_wash_ml / mycelium_mass_g) * dil / v_drop_ml
         return _finalize(lam * nm_scale, label="N_m", units="g^-1")
+    if m == "protein_molecules_nn":
+        # Purified proteins (Hartmann et al. 2022): ice nucleation site density per
+        # molecule. Concentrations refer to the undiluted solution, so a droplet of
+        # dilution d holds N_drop / d molecules.
+        mode = str(cfg.protein_input_mode or "mass").strip().lower()
+        v_drop_l = v_drop_ml / 1000.0
+        if mode == "molar":
+            c_um = _safe_float(cfg.protein_molar_conc_um, name="Molar concentration c_mol (µM)", positive=True)
+            n_drop = (c_um * 1e-6) * v_drop_l * AVOGADRO_PER_MOL
+            input_txt = f"c_mol={c_um:g} µM"
+        elif mode == "mass":
+            c_mg_ml = _safe_float(cfg.protein_mass_conc_mg_per_ml, name="Protein concentration c_m (mg/mL)", positive=True)
+            m_kda = _safe_float(cfg.protein_molar_mass_kda, name="Molar mass M (kDa)", positive=True)
+            n_drop = ((c_mg_ml * 1e-3) / (m_kda * 1e3)) * v_drop_ml * AVOGADRO_PER_MOL
+            input_txt = f"c_m={c_mg_ml:g} mg/mL, M={m_kda:g} kDa"
+        else:
+            raise ValueError(f"Unsupported protein input mode: {mode}")
+        note = f"protein input: {input_txt} -> {n_drop:.4g} molecules/droplet at d=1"
+        return _finalize(lam * dil / n_drop, label="N_n", units="molecule^-1", extra_note=note)
     if m == "air_washoff":
         v_wash_ml = _safe_float(cfg.wash_volume_ml, name="Wash volume (mL)", positive=True)
         x_frac = _safe_float(cfg.air_filter_fraction_x, name="Filter fraction x", positive=True)
@@ -560,9 +597,10 @@ def compute_analyzed_curves_from_raw(raw_df: pd.DataFrame, cfg: RawAnalyzeConfig
         warn_txt = " | Warnings: " + " ; ".join(all_warnings[:6])
         if len(all_warnings) > 6:
             warn_txt += f" ; (+{len(all_warnings) - 6} more)"
+    extra_txt = f" | {meta.get('extra_note')}" if meta.get("extra_note") else ""
     status = (
         f"Analyzed raw data with Vali | rows={len(df_out)} | method={meta.get('method')} -> {meta.get('label')} [{meta.get('units')}]"
-        f" | N0={meta.get('N0')} | V={meta.get('droplet_volume_ul')} µL{warn_txt}"
+        f" | N0={meta.get('N0')} | V={meta.get('droplet_volume_ul')} µL{extra_txt}{warn_txt}"
     )
     return df_out, status
 

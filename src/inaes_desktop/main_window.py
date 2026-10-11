@@ -91,6 +91,14 @@ from inaes_core.frozen_fraction import (
     available_ff_options,
     prepare_frozen_fraction_points,
 )
+from inaes_core.facet_report import (
+    COLOR_MODE_OPTIONS,
+    REPORT_FORMATS,
+    assign_report_panels,
+    build_facet_grid_figure,
+    export_facet_report,
+    point_color_map,
+)
 from inaes_core.kneepoint import (
     available_kp_options,
     filter_kp_points_for_sample,
@@ -153,6 +161,7 @@ NM_METHOD_TO_WORKFLOW_KEY: dict[str, str] = {
     "surface_area_bet": "surface_area_bet_from_mass",
     "cell_count": "cell_concentration",
     "fungal_biomass_nm": "fungal_biomass_nm",
+    "protein_molecules_nn": "protein_molecules_nn",
     "air_washoff": "air_washoff",
     "air_drop_on": "air_drop_on",
     "custom_dose": "custom_dose",
@@ -173,6 +182,10 @@ RAW_METHOD_FORMULA_HTML: dict[str, str] = {
     "fungal_biomass_nm": (
         "<i>N</i><sub>m</sub>(T) = [-ln(1 − FF) / <i>V</i><sub>drop</sub>] × (<i>V</i><sub>wash</sub> / <i>m</i>) × <i>d</i>"
     ),
+    "protein_molecules_nn": (
+        "<i>N</i><sub>n</sub>(T) = -ln(1 − FF) · <i>d</i> · <i>M</i> / (<i>c</i><sub>m</sub> · <i>V</i><sub>drop</sub> · <i>N</i><sub>A</sub>)"
+        " &nbsp;or&nbsp; -ln(1 − FF) · <i>d</i> / (<i>c</i><sub>mol</sub> · <i>V</i><sub>drop</sub> · <i>N</i><sub>A</sub>)"
+    ),
     "air_washoff": "<i>N</i><sub>INP,air</sub>(T) = -ln(1 − FF) · (<i>V</i><sub>wash</sub> / (<i>V</i><sub>drop</sub> · <i>x</i> · <i>V</i><sub>s</sub>))",
     "air_drop_on": "<i>N</i><sub>INP,air</sub>(T) = -ln(1 − FF) · (<i>A</i><sub>filter</sub> / (α · <i>V</i><sub>s</sub>))",
     "custom_dose": "<i>n</i><sub>X</sub>(T) = -ln(1 − FF) / <i>X</i>",
@@ -190,6 +203,17 @@ RAW_REQUIRED_PARAM_HTML: dict[str, str] = {
     "filter_area": "<i>A</i><sub>filter</sub>",
     "drop_area": "α",
     "custom_dose": "<i>X</i>",
+    "protein_mass_conc": "<i>c</i><sub>m</sub> (mg/mL)",
+    "protein_molar_mass": "<i>M</i> (kDa)",
+    "protein_molar_conc": "<i>c</i><sub>mol</sub> (µM)",
+}
+
+# Methods whose required inputs depend on a sub-option: text shown in the
+# equation reference instead of the plain RAW_METHOD_REQUIRED_PARAMS list.
+RAW_REQUIRED_PARAM_TEXT_OVERRIDE_HTML: dict[str, str] = {
+    "protein_molecules_nn": (
+        "<i>c</i><sub>m</sub> (mg/mL) + <i>M</i> (kDa), or <i>c</i><sub>mol</sub> (µM)"
+    ),
 }
 
 RUNTIME_PLOTLY_PROFILE = "balanced"
@@ -876,6 +900,379 @@ def _save_plotly_figure_local(parent: QWidget, fig: go.Figure, cfg: PlotExportCo
     return default_export_manager.save_plotly_figure(parent, fig, cfg)
 
 
+def _build_styled_facet_report(points: pd.DataFrame, *, style: dict[str, Any]) -> go.Figure:
+    fig = build_facet_grid_figure(
+        assign_report_panels(points),
+        y_col=str(style["y_col"]),
+        y_log=bool(style["y_log"]),
+        y_title=str(style["y_title"]),
+        y_fixed_range=style.get("y_fixed_range"),
+        color_mode=style.get("color_mode", "auto"),
+        palette=list(style.get("palette") or []),
+        ncols=int(style.get("ncols", 0) or 0),
+        shared_axes=bool(style.get("shared_axes", True)),
+        point_size=float(style.get("point_size", 5.0)),
+        border_width=float(style.get("border_width", 0.3)),
+        sample_symbol=str(style.get("sample_symbol", "circle")),
+        control_symbol=str(style.get("control_symbol", "square-open")),
+        show_grid=bool(style.get("show_grid", True)),
+        title=style.get("title"),
+    )
+    _apply_plot_background(fig, str(style.get("bg_mode") or "white"))
+    return fig
+
+
+def _compute_ff_report_payload(
+    *,
+    curves_df: pd.DataFrame,
+    filter_dict: dict[str, Any],
+    style: dict[str, Any],
+    progress_callback: Any | None = None,
+    cancel_requested: Any | None = None,
+) -> dict[str, Any]:
+    progress = progress_callback or (lambda _pct, _msg: None)
+    is_cancelled = cancel_requested or (lambda: False)
+    progress(5, "Filtering FF points...")
+    points, status = prepare_frozen_fraction_points(curves_df, FrozenFractionFilter(**dict(filter_dict)))
+    if len(points) == 0:
+        raise ValueError("No Frozen Fraction points for the selected samples and filters.")
+    if bool(is_cancelled()):
+        raise RuntimeError("Report preview cancelled by user.")
+    progress(40, "Building panel grid...")
+    fig = _build_styled_facet_report(points, style=style)
+    progress(95, "Finalizing...")
+    return {"fig": fig, "status": str(status), "n_panels": int(assign_report_panels(points)["Panel"].nunique())}
+
+
+def _compute_fc_report_payload(
+    *,
+    curves_df: pd.DataFrame,
+    filter_dict: dict[str, Any],
+    selected_samples: list[str],
+    style: dict[str, Any],
+    progress_callback: Any | None = None,
+    cancel_requested: Any | None = None,
+) -> dict[str, Any]:
+    progress = progress_callback or (lambda _pct, _msg: None)
+    is_cancelled = cancel_requested or (lambda: False)
+    progress(5, "Filtering curve points...")
+    points, status = prepare_freezing_curves_points(curves_df, FreezingCurvesFilter(**dict(filter_dict)))
+    wanted = {str(s).strip() for s in selected_samples if str(s).strip()}
+    points = points[points["Sample"].astype(str).str.strip().isin(wanted)].copy()
+    if len(points) == 0:
+        raise ValueError("No Freezing Curves points for the selected samples and filters.")
+    if bool(is_cancelled()):
+        raise RuntimeError("Report preview cancelled by user.")
+    progress(40, "Building panel grid...")
+    fig = _build_styled_facet_report(points, style=style)
+    progress(95, "Finalizing...")
+    return {"fig": fig, "status": str(status), "n_panels": int(assign_report_panels(points)["Panel"].nunique())}
+
+
+class FacetReportBox(QGroupBox):
+    """Batch report (one panel per selected sample) for Frozen Fraction / Freezing Curves.
+
+    The owning tab supplies job_factory() -> (worker_fn, kwargs) that builds the
+    styled grid figure; this box runs it in a worker thread, shows the preview in
+    its own preview_card (placed by the tab in the plot column) and saves png/svg/pdf.
+    """
+
+    def __init__(
+        self,
+        title: str,
+        *,
+        default_prefix: str,
+        log_tag: str,
+        show_color_mode: bool,
+        job_factory: Any,
+        log_widget: QTextEdit,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(title, parent)
+        self._job_factory = job_factory
+        self._log = log_widget
+        self._tag = str(log_tag)
+        self._fig: go.Figure | None = None
+        self._thread: QThread | None = None
+        self._worker: LongTaskWorker | None = None
+        self._mode = ""
+
+        lay = QVBoxLayout(self)
+        intro = QLabel(
+            "One panel per selected sample (sample | size when several sizes are selected). "
+            "Size, dilution and control filters, palette and plot style follow the settings above; "
+            "Panel colors sets how the panels are colored."
+        )
+        intro.setWordWrap(True)
+        lay.addWidget(intro)
+        self.samples = QListWidget()
+        self.samples.setSelectionMode(QAbstractItemView.MultiSelection)
+        self.samples.setMinimumHeight(140)
+        self.samples.itemSelectionChanged.connect(lambda: self.invalidate("Sample selection changed."))
+        lay.addWidget(self.samples)
+        sel_row = QHBoxLayout()
+        self.btn_select_all = QPushButton("Select All")
+        self.btn_select_all.clicked.connect(self.samples.selectAll)
+        sel_row.addWidget(self.btn_select_all)
+        self.btn_clear = QPushButton("Clear")
+        self.btn_clear.clicked.connect(self.samples.clearSelection)
+        sel_row.addWidget(self.btn_clear)
+        sel_row.addStretch(1)
+        lay.addLayout(sel_row)
+
+        form = QFormLayout()
+        form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        form.setRowWrapPolicy(QFormLayout.WrapLongRows)
+        form.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self.cb_color_mode: QComboBox | None = None
+        if show_color_mode:
+            self.cb_color_mode = QComboBox()
+            for lbl, val in COLOR_MODE_OPTIONS:
+                self.cb_color_mode.addItem(lbl, val)
+            form.addRow("Panel colors", self.cb_color_mode)
+        self.cb_cols = QComboBox()
+        self.cb_cols.addItem("Auto", 0)
+        for n_cols in range(1, 9):
+            self.cb_cols.addItem(str(n_cols), n_cols)
+        form.addRow("Columns", self.cb_cols)
+        self.chk_shared_axes = QCheckBox("Same axis ranges in all panels")
+        self.chk_shared_axes.setChecked(True)
+        form.addRow("Axes", self.chk_shared_axes)
+        fmt_host = QWidget()
+        fmt_lay = QHBoxLayout(fmt_host)
+        fmt_lay.setContentsMargins(0, 0, 0, 0)
+        self.fmt_checks: dict[str, QCheckBox] = {}
+        for fmt in REPORT_FORMATS:
+            chk = QCheckBox(fmt.upper())
+            chk.setChecked(True)
+            fmt_lay.addWidget(chk)
+            self.fmt_checks[fmt] = chk
+        fmt_lay.addStretch(1)
+        form.addRow("Formats", fmt_host)
+        self.in_dir = QLineEdit(str(Path.home() / "Desktop"))
+        form.addRow("Save folder", self.in_dir)
+        self.btn_browse = QPushButton("Browse...")
+        self.btn_browse.clicked.connect(self._browse_dir)
+        form.addRow("", self.btn_browse)
+        self.in_prefix = QLineEdit(str(default_prefix))
+        form.addRow("File prefix", self.in_prefix)
+        lay.addLayout(form)
+
+        actions = QGridLayout()
+        actions.setHorizontalSpacing(8)
+        actions.setVerticalSpacing(8)
+        self.btn_preview = QPushButton("Build Preview")
+        self.btn_preview.clicked.connect(self._build_preview)
+        actions.addWidget(self.btn_preview, 0, 0)
+        self.btn_cancel = QPushButton("Cancel Report")
+        self.btn_cancel.setEnabled(False)
+        self.btn_cancel.clicked.connect(self._cancel)
+        actions.addWidget(self.btn_cancel, 0, 1)
+        self.btn_save = QPushButton("Save Report")
+        self.btn_save.setEnabled(False)
+        self.btn_save.clicked.connect(self._save_report)
+        actions.addWidget(self.btn_save, 1, 0, 1, 2)
+        lay.addLayout(actions)
+
+        self.pb = QProgressBar()
+        self.pb.setRange(0, 100)
+        self.pb.setValue(0)
+        lay.addWidget(self.pb)
+        self.lbl_status = QLabel("Report status: waiting")
+        self.lbl_status.setWordWrap(True)
+        lay.addWidget(self.lbl_status)
+
+        self.preview_card = QGroupBox(f"{title} preview")
+        prev_lay = QVBoxLayout(self.preview_card)
+        prev_lay.setSpacing(6)
+        self.preview_note = QLabel("")
+        self.preview_note.setWordWrap(True)
+        prev_lay.addWidget(self.preview_note)
+        self.preview_view = QWebEngineView()
+        self.preview_view.setMinimumHeight(320)
+        prev_lay.addWidget(self.preview_view, stretch=1)
+        self.preview_card.setVisible(False)
+
+    def set_samples(self, samples: list[str]) -> None:
+        self.samples.blockSignals(True)
+        self.samples.clear()
+        for smp in samples:
+            self.samples.addItem(QListWidgetItem(str(smp)))
+        self.samples.selectAll()
+        self.samples.blockSignals(False)
+        self.invalidate("Input data changed.")
+
+    def selected_samples(self) -> list[str]:
+        return [it.text() for it in self.samples.selectedItems()]
+
+    def color_mode(self) -> str:
+        return str(self.cb_color_mode.currentData() or "auto") if self.cb_color_mode is not None else "auto"
+
+    def layout_options(self) -> dict[str, Any]:
+        return {"ncols": int(self.cb_cols.currentData() or 0), "shared_axes": bool(self.chk_shared_axes.isChecked())}
+
+    def _running(self) -> bool:
+        return self._thread is not None and self._thread.isRunning()
+
+    def _set_busy(self, busy: bool) -> None:
+        self.btn_preview.setEnabled(not busy)
+        self.btn_cancel.setEnabled(busy)
+        self.btn_save.setEnabled((not busy) and self._fig is not None)
+
+    def invalidate(self, reason: str = "") -> None:
+        if self._running():
+            return
+        had_preview = self._fig is not None
+        self._fig = None
+        self.btn_save.setEnabled(False)
+        if had_preview:
+            self.preview_card.setVisible(False)
+            self.preview_view.setHtml("")
+            self.lbl_status.setText(f"Report status: preview cleared ({reason}) Build it again before saving.")
+
+    def _browse_dir(self) -> None:
+        start = self.in_dir.text().strip() or str(Path.home() / "Desktop")
+        chosen = QFileDialog.getExistingDirectory(self, "Report folder", start)
+        if chosen:
+            self.in_dir.setText(chosen)
+
+    def _build_preview(self) -> None:
+        if self._running():
+            QMessageBox.information(self, "Report running", "A report task is already running.")
+            return
+        if not self.selected_samples():
+            QMessageBox.warning(self, "Missing selection", "Select at least one sample for the report.")
+            return
+        try:
+            fn, kwargs = self._job_factory()
+        except ValueError as exc:
+            self.lbl_status.setText(f"Report status: {exc}")
+            return
+        self.invalidate("rebuilding")
+        self._start(fn, kwargs, mode="preview", start_msg="Building report preview...")
+
+    def _save_report(self) -> None:
+        if self._running():
+            QMessageBox.information(self, "Report running", "A report task is already running.")
+            return
+        if self._fig is None:
+            QMessageBox.information(self, "Missing preview", "Build the report preview first.")
+            return
+        formats = [f for f, chk in self.fmt_checks.items() if chk.isChecked()]
+        if not formats:
+            QMessageBox.warning(self, "Missing format", "Select at least one format (PNG, SVG, PDF).")
+            return
+        kwargs = dict(
+            fig=go.Figure(self._fig),
+            output_dir=Path(self.in_dir.text().strip() or str(Path.home() / "Desktop")),
+            file_prefix=self.in_prefix.text().strip() or "report",
+            formats=formats,
+        )
+        self._start(export_facet_report, kwargs, mode="save", start_msg="Saving report...")
+
+    def _start(self, fn: Any, kwargs: dict[str, Any], *, mode: str, start_msg: str) -> None:
+        self._mode = mode
+        self._set_busy(True)
+        self.pb.setValue(0)
+        self.lbl_status.setText(f"Report status: RUNNING | 0% | {start_msg}")
+        self._log.append(f"[{self._tag}-report] {mode} started")
+        thread = QThread(self)
+        worker = LongTaskWorker(fn, kwargs=kwargs, progress_kwarg="progress_callback", cancel_kwarg="cancel_requested")
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.progress.connect(self._on_progress)
+        worker.succeeded.connect(self._on_succeeded)
+        worker.failed.connect(self._on_failed)
+        worker.cancelled.connect(self._on_cancelled)
+        worker.succeeded.connect(thread.quit)
+        worker.failed.connect(thread.quit)
+        worker.cancelled.connect(thread.quit)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(self._on_finished)
+        self._thread = thread
+        self._worker = worker
+        thread.start()
+
+    def _on_progress(self, pct: int, msg: str) -> None:
+        if self.sender() is not self._worker:
+            return
+        self.pb.setValue(int(max(0, min(100, pct))))
+        self.lbl_status.setText(f"Report status: RUNNING | {pct}% | {msg}")
+
+    def _on_succeeded(self, payload: object) -> None:
+        if self.sender() is not self._worker:
+            return
+        self.pb.setValue(100)
+        if not isinstance(payload, dict):
+            self._on_failed("Invalid report payload.")
+            return
+        if self._mode == "preview":
+            fig = payload.get("fig")
+            if not isinstance(fig, go.Figure):
+                self._on_failed("Report preview missing figure.")
+                return
+            self._fig = fig
+            # Preview fills the card width; the saved files keep the fixed panel size.
+            prev = go.Figure(fig)
+            prev.update_layout(width=None, autosize=True)
+            h = int(fig.layout.height or 600)
+            self.preview_view.setMinimumHeight(max(320, h))
+            self.preview_note.setText(
+                f"{int(payload.get('n_panels', 0))} panels | saved size {int(fig.layout.width or 0)} x {h} px (x2 for PNG)"
+            )
+            self.preview_card.setVisible(True)
+            _set_plotly_html(self.preview_view, prev)
+            self.lbl_status.setText(f"Report status: preview ready | {int(payload.get('n_panels', 0))} panels")
+            self._log.append(f"[{self._tag}-report] preview ready | {payload.get('status', '')}")
+        else:
+            saved = [str(x) for x in (payload.get("saved") or [])]
+            names = ", ".join(Path(x).name for x in saved)
+            self.lbl_status.setText(f"Report status: saved {names}")
+            for x in saved:
+                self._log.append(f"[{self._tag}-report] saved: {x}")
+
+    def _on_failed(self, msg: str) -> None:
+        if self.sender() is not None and self.sender() is not self._worker:
+            return
+        txt = str(msg or "Unknown error.")
+        self.pb.setValue(0)
+        self.lbl_status.setText(f"Report status: ERROR | {txt.splitlines()[0] if txt else txt}")
+        self._log.append(f"[{self._tag}-report] ERROR: {txt}")
+
+    def _on_cancelled(self, msg: str) -> None:
+        self.pb.setValue(0)
+        self.lbl_status.setText(f"Report status: CANCELLED | {msg or 'Cancelled.'}")
+        self._log.append(f"[{self._tag}-report] cancelled")
+
+    def _on_finished(self) -> None:
+        # Ignore a late "finished" from an older thread so it cannot clear the current one.
+        sender = self.sender()
+        if sender is not None and self._thread is not None and sender is not self._thread:
+            return
+        self._worker = None
+        self._thread = None
+        self._set_busy(False)
+
+    def _cancel(self) -> None:
+        if self._worker is not None:
+            try:
+                self._worker.request_cancel()
+                self.lbl_status.setText("Report status: cancel requested...")
+            except Exception as exc:
+                self._log.append(f"[{self._tag}-report] cancel request error: {exc}")
+
+    def shutdown(self) -> None:
+        try:
+            if self._worker is not None:
+                self._worker.request_cancel()
+        except Exception:
+            pass
+        _stop_qthread(self._thread)
+        self._worker = None
+        self._thread = None
+
+
 def _safe_axis_range(min_v: float, max_v: float, *, log_axis: bool) -> tuple[float, float] | None:
     if not (pd.notna(min_v) and pd.notna(max_v)):
         return None
@@ -1345,10 +1742,18 @@ RAW_METHOD_REQUIRED_PARAMS: dict[str, set[str]] = {
     "surface_area_bet_from_mass": {"mass_conc", "bet_area"},
     "cell_concentration": {"cell_conc"},
     "fungal_biomass_nm": {"wash_volume", "sample_mass"},
+    # Default input mode (mass concentration + molar mass); see _raw_method_required_params.
+    "protein_molecules_nn": {"protein_mass_conc", "protein_molar_mass"},
     "air_washoff": {"wash_volume", "air_filter_frac", "air_volume_l"},
     "air_drop_on": {"air_volume_l", "filter_area", "drop_area"},
     "custom_dose": {"custom_dose"},
 }
+
+
+def _raw_method_required_params(method: str, *, protein_input_mode: str = "mass") -> set[str]:
+    if method == "protein_molecules_nn" and str(protein_input_mode) == "molar":
+        return {"protein_molar_conc"}
+    return set(RAW_METHOD_REQUIRED_PARAMS.get(method, set()))
 
 
 def _wrap_scroll(widget: QWidget, *, horizontal: bool = False) -> QScrollArea:
@@ -2351,6 +2756,35 @@ class DataUploadTab(QWidget):
             step=0.1,
         )
         self.raw_method_form.addRow("Custom dose per droplet X", self.sp_raw_custom_dose)
+        self.cb_raw_protein_input = QComboBox()
+        self.cb_raw_protein_input.addItem("Mass concentration + molar mass", "mass")
+        self.cb_raw_protein_input.addItem("Molar concentration", "molar")
+        self.cb_raw_protein_input.currentIndexChanged.connect(self._on_raw_method_changed)
+        self.raw_method_form.addRow("Protein amount input", self.cb_raw_protein_input)
+        self.sp_raw_protein_mass_conc = SliderNumberInput(
+            min_value=0.000001,
+            max_value=1_000.0,
+            value=1.0,
+            decimals=6,
+            step=0.1,
+        )
+        self.raw_method_form.addRow("Protein concentration c_m (mg/mL)", self.sp_raw_protein_mass_conc)
+        self.sp_raw_protein_molar_mass = SliderNumberInput(
+            min_value=0.1,
+            max_value=100_000.0,
+            value=100.0,
+            decimals=3,
+            step=1.0,
+        )
+        self.raw_method_form.addRow("Molar mass M (kDa)", self.sp_raw_protein_molar_mass)
+        self.sp_raw_protein_molar_conc = SliderNumberInput(
+            min_value=0.000001,
+            max_value=1_000.0,
+            value=1.0,
+            decimals=6,
+            step=0.1,
+        )
+        self.raw_method_form.addRow("Molar concentration c_mol (µM)", self.sp_raw_protein_molar_conc)
         self.lbl_raw_platform_note = QLabel(
             "Micro-PINGUIN defaults applied (N0=384, V=30 µL). You can still edit values if needed."
         )
@@ -2475,6 +2909,7 @@ class DataUploadTab(QWidget):
             ("Surface area BET (n_s,BET m^-2)", "surface_area_bet"),
             ("Cell count (n_cell cell^-1)", "cell_count"),
             ("Fungal biomass (N_m g^-1 mycelium)", "fungal_biomass_nm"),
+            ("Purified protein (N_n molecule^-1)", "protein_molecules_nn"),
             ("Air wash-off (N_INP_air L^-1)", "air_washoff"),
             ("Air drop-on (N_INP_air L^-1)", "air_drop_on"),
             ("Custom dose (nX X^-1)", "custom_dose"),
@@ -2810,6 +3245,9 @@ class DataUploadTab(QWidget):
             "filter_area": self.sp_raw_filter_area,
             "drop_area": self.sp_raw_drop_area,
             "custom_dose": self.sp_raw_custom_dose,
+            "protein_mass_conc": self.sp_raw_protein_mass_conc,
+            "protein_molar_mass": self.sp_raw_protein_molar_mass,
+            "protein_molar_conc": self.sp_raw_protein_molar_conc,
             "extra_dilution": self.sp_raw_extra_dilution,
         }
 
@@ -2824,7 +3262,13 @@ class DataUploadTab(QWidget):
 
     def _on_raw_method_changed(self, *_args: Any) -> None:
         method = str(self.cb_raw_method.currentData() or "mass_extraction_nm")
-        required = set(RAW_METHOD_REQUIRED_PARAMS.get(method, set()))
+        protein_mode = str(self.cb_raw_protein_input.currentData() or "mass")
+        required = _raw_method_required_params(method, protein_input_mode=protein_mode)
+        show_protein_input = method == "protein_molecules_nn"
+        self.cb_raw_protein_input.setVisible(show_protein_input)
+        protein_input_label = self.raw_method_form.labelForField(self.cb_raw_protein_input)
+        if protein_input_label is not None:
+            protein_input_label.setVisible(show_protein_input)
         widgets = self._raw_param_widgets()
         # extra_dilution is currently reserved for future method extensions.
         for key, widget in widgets.items():
@@ -2941,7 +3385,8 @@ class DataUploadTab(QWidget):
             return
 
         method = str(self.cb_raw_method.currentData() or "mass_extraction_nm")
-        required = set(RAW_METHOD_REQUIRED_PARAMS.get(method, set()))
+        protein_mode = str(self.cb_raw_protein_input.currentData() or "mass")
+        required = _raw_method_required_params(method, protein_input_mode=protein_mode)
         raw_vals = {
             "mass_conc": float(self.sp_raw_mass_conc.value()),
             "cell_conc": float(self.sp_raw_cell_conc.value()),
@@ -2952,6 +3397,9 @@ class DataUploadTab(QWidget):
             "filter_area": float(self.sp_raw_filter_area.value()),
             "drop_area": float(self.sp_raw_drop_area.value()),
             "custom_dose": float(self.sp_raw_custom_dose.value()),
+            "protein_mass_conc": float(self.sp_raw_protein_mass_conc.value()),
+            "protein_molar_mass": float(self.sp_raw_protein_molar_mass.value()),
+            "protein_molar_conc": float(self.sp_raw_protein_molar_conc.value()),
         }
         missing_required = sorted([k for k in required if k in raw_vals and (raw_vals.get(k) is None or raw_vals.get(k) <= 0)])
         if missing_required:
@@ -2993,6 +3441,10 @@ class DataUploadTab(QWidget):
             filter_exposed_area=raw_vals["filter_area"],
             droplet_footprint_area=raw_vals["drop_area"],
             custom_dose_per_drop=raw_vals["custom_dose"],
+            protein_input_mode=protein_mode,
+            protein_mass_conc_mg_per_ml=raw_vals["protein_mass_conc"],
+            protein_molar_mass_kda=raw_vals["protein_molar_mass"],
+            protein_molar_conc_um=raw_vals["protein_molar_conc"],
         )
 
         self.pb_raw_analyze.setValue(0)
@@ -3499,7 +3951,7 @@ class DataUploadTab(QWidget):
         rows.append("<h3>RAW normalization methods</h3>")
         for lbl, method in RAW_WORKFLOW_METHOD_OPTIONS:
             req = sorted(RAW_METHOD_REQUIRED_PARAMS.get(str(method), set()))
-            req_txt = _required_param_symbols_html(req)
+            req_txt = RAW_REQUIRED_PARAM_TEXT_OVERRIDE_HTML.get(str(method)) or _required_param_symbols_html(req)
             formula = _method_formula_html(str(method))
             units = _format_math_exponents(_nm_axis_label_from_method(str(method)))
             selected_tag = " <b>[selected]</b>" if str(method) == selected_raw_method else ""
@@ -3826,6 +4278,10 @@ class DataUploadTab(QWidget):
                 "filter_area": float(self.sp_raw_filter_area.value()),
                 "drop_area": float(self.sp_raw_drop_area.value()),
                 "custom_dose": float(self.sp_raw_custom_dose.value()),
+                "protein_input_mode": str(self.cb_raw_protein_input.currentData() or "mass"),
+                "protein_mass_conc_mg_ml": float(self.sp_raw_protein_mass_conc.value()),
+                "protein_molar_mass_kda": float(self.sp_raw_protein_molar_mass.value()),
+                "protein_molar_conc_um": float(self.sp_raw_protein_molar_conc.value()),
             },
             "merge_mapping": merge_map,
             "metadata_mapping": {
@@ -3920,6 +4376,17 @@ class DataUploadTab(QWidget):
         self.sp_raw_filter_area.setValue(max(0.000001, _as_float(rmethod.get("filter_area"), float(self.sp_raw_filter_area.value()))))
         self.sp_raw_drop_area.setValue(max(0.000001, _as_float(rmethod.get("drop_area"), float(self.sp_raw_drop_area.value()))))
         self.sp_raw_custom_dose.setValue(max(0.000001, _as_float(rmethod.get("custom_dose"), float(self.sp_raw_custom_dose.value()))))
+        if rmethod.get("protein_input_mode"):
+            self._set_combo_by_data(self.cb_raw_protein_input, rmethod.get("protein_input_mode"))
+        self.sp_raw_protein_mass_conc.setValue(
+            max(0.000001, _as_float(rmethod.get("protein_mass_conc_mg_ml"), float(self.sp_raw_protein_mass_conc.value())))
+        )
+        self.sp_raw_protein_molar_mass.setValue(
+            max(0.1, _as_float(rmethod.get("protein_molar_mass_kda"), float(self.sp_raw_protein_molar_mass.value())))
+        )
+        self.sp_raw_protein_molar_conc.setValue(
+            min(1_000.0, max(0.000001, _as_float(rmethod.get("protein_molar_conc_um"), float(self.sp_raw_protein_molar_conc.value()))))
+        )
         self._on_raw_method_changed()
 
         merge_map = payload.get("merge_mapping", {}) if isinstance(payload.get("merge_mapping"), dict) else {}
@@ -4114,10 +4581,20 @@ class FreezingCurvesTab(QWidget):
 
         self.lbl_status = QLabel("Status: waiting")
         self.lbl_status.setWordWrap(True)
-        left_lay.addWidget(self.lbl_status)
-
         self.log = QTextEdit()
         self.log.setReadOnly(True)
+
+        self.report_box = FacetReportBox(
+            "Create Report (batch)",
+            default_prefix="freezing_curves_report",
+            log_tag="fc",
+            show_color_mode=True,
+            job_factory=self._fc_report_job,
+            log_widget=self.log,
+        )
+        left_lay.addWidget(self.report_box)
+
+        left_lay.addWidget(self.lbl_status)
         left_lay.addWidget(self.log, stretch=1)
         left_lay.addStretch(1)
 
@@ -4136,7 +4613,7 @@ class FreezingCurvesTab(QWidget):
         mean_panel_lay.addWidget(self.mean_plot, stretch=1)
 
         right_scroll = _build_vertical_scroll_stack(
-            [main_panel, mean_panel],
+            [main_panel, mean_panel, self.report_box.preview_card],
             min_width=780,
             spacing=10,
             add_stretch=True,
@@ -4252,6 +4729,7 @@ class FreezingCurvesTab(QWidget):
             self.dil_box.set_items([], select_all=False)
             self.loc_box.set_items([], select_all=False)
             self._refresh_location_shape_controls([])
+            self.report_box.set_samples([])
             self.lbl_missing.setText("")
             self._set_fc_busy(False)
             return
@@ -4277,6 +4755,47 @@ class FreezingCurvesTab(QWidget):
         self.dil_box.set_items(opts.get("dilutions", []), select_all=True)
         self.loc_box.set_items(opts.get("locations", []), select_all=True)
         self._refresh_location_shape_controls(self.loc_box.selected_values())
+        samples = []
+        if "Sample" in table.df.columns:
+            samples = sorted(
+                table.df["Sample"].dropna().astype(str).str.strip().replace("", np.nan).dropna().unique().tolist()
+            )
+        self.report_box.set_samples(samples)
+
+    def _fc_report_job(self) -> tuple[Any, dict[str, Any]]:
+        table = self._active_curves_table()
+        if table is None:
+            raise ValueError("Load curves first.")
+        missing = [c for c in self.REQUIRED_COLUMNS if c not in table.df.columns]
+        if missing:
+            raise ValueError(f"Missing required columns for Freezing Curves: {missing}.")
+        filter_dict = dict(
+            selected_sizes=self.size_box.selected_values() or self.size_box.values(),
+            selected_dilutions=self.dil_box.selected_values() or self.dil_box.values(),
+            selected_locations=self.loc_box.selected_values() or self.loc_box.values(),
+            include_controls=self.chk_include_controls.isChecked(),
+        )
+        style = dict(
+            y_col="nm",
+            y_log=True,
+            y_title=_format_math_exponents(_coerce_nm_axis_label(self.state.nm_axis_label)),
+            color_mode=self.report_box.color_mode(),
+            palette=_palette_hex_named(self.cb_palette.currentData() or "default"),
+            point_size=float(self.sl_point_size.value()),
+            border_width=float(self.sl_point_border.value()) / 100.0,
+            sample_symbol="circle",
+            control_symbol="square-open",
+            show_grid=True,
+            bg_mode=str(self.cb_bg_mode.currentData() or "white"),
+            title=_compose_optional_plot_title(self.in_plot_title.text(), self.in_plot_subtitle.text()),
+            **self.report_box.layout_options(),
+        )
+        return _compute_fc_report_payload, dict(
+            curves_df=table.df.copy(),
+            filter_dict=filter_dict,
+            selected_samples=self.report_box.selected_samples(),
+            style=style,
+        )
 
     def _run_curves(self) -> None:
         if self._fc_run_running():
@@ -4639,6 +5158,7 @@ class FreezingCurvesTab(QWidget):
             self.log.append(f"[fc] mean export error: {exc}")
 
     def _shutdown_background_threads(self) -> None:
+        self.report_box.shutdown()
         try:
             if self._fc_worker is not None:
                 self._fc_worker.request_cancel()
@@ -4785,7 +5305,7 @@ class CompareSamplesTab(QWidget):
         plot_panel_lay = QVBoxLayout(plot_panel)
         plot_panel_lay.setSpacing(6)
         self.plot_view = QWebEngineView()
-        self.plot_view.setMinimumHeight(460)
+        self.plot_view.setMinimumHeight(500)  # = figure height, so the x-axis title is not clipped
         plot_panel_lay.addWidget(self.plot_view, stretch=1)
 
         right_scroll = _build_vertical_scroll_stack(
@@ -5148,7 +5668,6 @@ class FrozenFractionTab(QWidget):
         self._last_plot_fig: go.Figure | None = None
         self._ff_thread: QThread | None = None
         self._ff_worker: LongTaskWorker | None = None
-        self._ff_run_mode: str = "multiple"
         self._build_ui()
         self.state.curves_raw_changed.connect(self._on_state_changed)
         self.state.curves_standardized_changed.connect(self._on_state_changed)
@@ -5191,14 +5710,15 @@ class FrozenFractionTab(QWidget):
         self.dil_box = ChipMultiSelect("Dilution.factor")
 
         left_lay.addWidget(self.sample_box)
+        self.lbl_sample_hint = QLabel(
+            "The plot shows every selected sample. For many samples, Create Report (below) "
+            "draws one panel per sample."
+        )
+        self.lbl_sample_hint.setWordWrap(True)
+        self.lbl_sample_hint.setProperty("caption", True)
+        left_lay.addWidget(self.lbl_sample_hint)
         left_lay.addWidget(self.size_box)
         left_lay.addWidget(self.dil_box)
-
-        self.cb_mode = QComboBox()
-        self.cb_mode.addItem("Single sample file (combine all dilutions)", "single")
-        self.cb_mode.addItem("Multiple samples in file (select sample + dilutions)", "multiple")
-        left_lay.addWidget(QLabel("File interpretation (Frozen Fraction)"))
-        left_lay.addWidget(self.cb_mode)
 
         self.chk_show_control = QCheckBox("Show control points")
         self.chk_show_control.setChecked(True)
@@ -5209,6 +5729,11 @@ class FrozenFractionTab(QWidget):
         self.cb_palette = QComboBox()
         _init_palette_combo(self.cb_palette, include_default=True, default_value="set1")
         style_lay.addRow("Palette", self.cb_palette)
+
+        self.cb_color_mode = QComboBox()
+        for lbl, val in COLOR_MODE_OPTIONS:
+            self.cb_color_mode.addItem(lbl, val)
+        style_lay.addRow("Color mode", self.cb_color_mode)
 
         row_ps, self.sl_point_size, _ = _make_labeled_slider(min_value=2, max_value=16, value=7, decimals=0, step=1)
         style_lay.addRow("Point size", row_ps)
@@ -5281,10 +5806,20 @@ class FrozenFractionTab(QWidget):
 
         self.lbl_status = QLabel("Status: waiting")
         self.lbl_status.setWordWrap(True)
-        left_lay.addWidget(self.lbl_status)
-
         self.log = QTextEdit()
         self.log.setReadOnly(True)
+
+        self.report_box = FacetReportBox(
+            "Create Report (batch)",
+            default_prefix="frozen_fraction_report",
+            log_tag="ff",
+            show_color_mode=True,
+            job_factory=self._ff_report_job,
+            log_widget=self.log,
+        )
+        left_lay.addWidget(self.report_box)
+
+        left_lay.addWidget(self.lbl_status)
         left_lay.addWidget(self.log, stretch=1)
         left_lay.addStretch(1)
 
@@ -5292,11 +5827,13 @@ class FrozenFractionTab(QWidget):
         plot_panel_lay = QVBoxLayout(plot_panel)
         plot_panel_lay.setSpacing(6)
         self.plot_view = QWebEngineView()
-        self.plot_view.setMinimumHeight(460)
+        # Same height as the figure (layout height=500 in _draw_ff_plotly), otherwise the
+        # bottom of the plot, including the x-axis title, is clipped.
+        self.plot_view.setMinimumHeight(500)
         plot_panel_lay.addWidget(self.plot_view, stretch=1)
 
         right_scroll = _build_vertical_scroll_stack(
-            [plot_panel],
+            [plot_panel, self.report_box.preview_card],
             min_width=760,
             spacing=10,
             add_stretch=True,
@@ -5357,6 +5894,7 @@ class FrozenFractionTab(QWidget):
             self.sample_box.set_items([], select_all=False)
             self.size_box.set_items([], select_all=False)
             self.dil_box.set_items([], select_all=False)
+            self.report_box.set_samples([])
             self.lbl_missing.setText("")
             self._set_ff_busy(False)
             return
@@ -5378,9 +5916,45 @@ class FrozenFractionTab(QWidget):
         self._set_ff_busy(False)
 
         opts = available_ff_options(table.df)
-        self.sample_box.set_items(opts.get("samples", []), select_all=True)
+        # Start from the first sample only: plotting every sample of a large file at once
+        # is slow and unreadable (use the report for that).
+        samples_all = opts.get("samples", [])
+        self.sample_box.set_items(samples_all, select_all=False)
+        self.sample_box.set_selected_values(samples_all[:1])
         self.size_box.set_items(opts.get("sizes", []), select_all=True)
         self.dil_box.set_items(opts.get("dilutions", []), select_all=True)
+        self.report_box.set_samples(opts.get("samples", []))
+
+    def _ff_report_job(self) -> tuple[Any, dict[str, Any]]:
+        table = self._active_curves_table()
+        if table is None:
+            raise ValueError("Load curves first.")
+        missing = [c for c in self.REQUIRED_COLUMNS if c not in table.df.columns]
+        if missing:
+            raise ValueError(f"Missing required columns for FF: {missing}.")
+        filter_dict = dict(
+            selected_samples=self.report_box.selected_samples(),
+            selected_sizes=self.size_box.selected_values() or self.size_box.values(),
+            selected_dilutions=self.dil_box.selected_values() or self.dil_box.values(),
+            show_control=self.chk_show_control.isChecked(),
+        )
+        style = dict(
+            y_col="FF",
+            y_log=False,
+            y_title="Frozen Fraction",
+            y_fixed_range=[-0.02, 1.02],
+            color_mode=self.report_box.color_mode(),
+            palette=_palette_hex_named(self.cb_palette.currentData() or "default"),
+            point_size=float(self.sl_point_size.value()),
+            border_width=float(self.sl_point_border.value()) / 100.0,
+            sample_symbol=str(self.cb_symbol_sample.currentData() or "circle"),
+            control_symbol=str(self.cb_symbol_control.currentData() or "square-open"),
+            show_grid=bool(self.chk_grid.isChecked()),
+            bg_mode=str(self.cb_bg_mode.currentData() or "white"),
+            title=_compose_optional_plot_title(self.in_plot_title.text(), self.in_plot_subtitle.text()),
+            **self.report_box.layout_options(),
+        )
+        return _compute_ff_report_payload, dict(curves_df=table.df.copy(), filter_dict=filter_dict, style=style)
 
     def _run_ff(self) -> None:
         if self._ff_run_running():
@@ -5391,14 +5965,12 @@ class FrozenFractionTab(QWidget):
             QMessageBox.warning(self, "Missing input", "Load curves first.")
             return
 
-        selected_samples = self.sample_box.selected_values() or self.sample_box.values()
+        selected_samples = self.sample_box.selected_values()
+        if not selected_samples:
+            self.lbl_status.setText("Status: select at least one sample.")
+            return
         selected_sizes = self.size_box.selected_values() or self.size_box.values()
         selected_dilutions = self.dil_box.selected_values() or self.dil_box.values()
-        ff_mode = str(self.cb_mode.currentData() or "multiple")
-        if ff_mode == "single" and len(selected_samples) > 1:
-            selected_samples = selected_samples[:1]
-            self.log.append("[ff] single-sample mode: using first selected sample only.")
-        self._ff_run_mode = ff_mode
 
         flt_dict = dict(
             selected_samples=selected_samples,
@@ -5448,16 +6020,15 @@ class FrozenFractionTab(QWidget):
         if not isinstance(points, pd.DataFrame):
             raise ValueError("Invalid Frozen Fraction payload: missing points.")
         status = str(payload.get("status") or "")
-        ff_mode = str(self._ff_run_mode or "multiple")
 
         if len(points) == 0:
-            self.lbl_status.setText(f"Status: No points after filtering | mode={ff_mode} | {status}")
+            self.lbl_status.setText(f"Status: No points after filtering | {status}")
             self.log.append(f"[ff] no points | {status}")
             self._clear_ff_outputs()
             return
 
         self._draw_ff_plotly(points)
-        self.lbl_status.setText(f"Status: OK | mode={ff_mode} | {status}")
+        self.lbl_status.setText(f"Status: OK | {status}")
         self.log.append(f"[ff] {status}")
 
     def _on_ff_succeeded(self, payload: object) -> None:
@@ -5513,50 +6084,107 @@ class FrozenFractionTab(QWidget):
             points["Dilution.plot"].astype(str).unique().tolist(),
             key=lambda x: (0, float(x), x) if x.replace(".", "", 1).isdigit() else (1, x),
         )
-        color_map = {d: palette[i % len(palette)] for i, d in enumerate(dilutions)}
         sample_symbol = str(self.cb_symbol_sample.currentData() or "circle")
         control_symbol = str(self.cb_symbol_control.currentData() or "square-open")
         point_size = int(self.sl_point_size.value())
         border_w = float(self.sl_point_border.value()) / 100.0
         show_grid = bool(self.chk_grid.isChecked())
+        color_mode, shade_map, samples, _ = point_color_map(
+            points, mode=self.cb_color_mode.currentData() or "auto", palette=palette
+        )
 
-        # Split traces by dilution + control to keep symbols and legend clean.
-        for dil in dilutions:
-            dd = points[points["Dilution.plot"].astype(str) == str(dil)]
+        def _add_ff_trace(g: pd.DataFrame, *, name: str, color: str, ctrl: str, **extra: Any) -> None:
+            fig.add_trace(
+                go.Scatter(
+                    x=g["Freezing.temperature"],
+                    y=g["FF"],
+                    mode="markers",
+                    name=name,
+                    marker=dict(
+                        color=color,
+                        symbol=control_symbol if ctrl == "Yes" else sample_symbol,
+                        size=point_size,
+                        opacity=0.9,
+                        line=dict(color="#111827", width=border_w),
+                    ),
+                    customdata=np.stack(
+                        [
+                            g["Sample"].astype(str).to_numpy(),
+                            g["Size"].astype(str).to_numpy(),
+                            g["Dilution.plot"].astype(str).to_numpy(),
+                            g["Control_norm"].astype(str).to_numpy(),
+                        ],
+                        axis=1,
+                    ),
+                    hovertemplate=(
+                        "Sample=%{customdata[0]}<br>Size=%{customdata[1]}<br>Dilution=%{customdata[2]}<br>"
+                        "Control=%{customdata[3]}<br>FF=%{y:.3f}<br>T=%{x:.2f}°C<extra></extra>"
+                    ),
+                    **extra,
+                )
+            )
+
+        if color_mode in {"dilution", "single_shades"}:
+            # One colour per dilution (all samples pooled), split by control: distinct palette
+            # colours, or shades of the first palette colour for "one color for all samples".
+            if color_mode == "dilution":
+                color_map = {d: palette[i % len(palette)] for i, d in enumerate(dilutions)}
+            else:
+                color_map = {d: shade_map[(samples[0], str(d))] for d in dilutions}
+            for dil in dilutions:
+                dd = points[points["Dilution.plot"].astype(str) == str(dil)]
+                for ctrl in ["No", "Yes"]:
+                    g = dd[dd["Control_norm"].astype(str) == ctrl]
+                    if len(g) == 0:
+                        continue
+                    name = str(dil) if ctrl == "No" else f"{dil} (control)"
+                    _add_ff_trace(g, name=name, color=color_map.get(str(dil), palette[0]), ctrl=ctrl)
+        elif color_mode == "single":
+            fig.update_layout(legend_title_text="")
             for ctrl in ["No", "Yes"]:
-                g = dd[dd["Control_norm"].astype(str) == ctrl]
+                g = points[points["Control_norm"].astype(str) == ctrl]
                 if len(g) == 0:
                     continue
-                symbol = control_symbol if ctrl == "Yes" else sample_symbol
-                name = str(dil) if ctrl == "No" else f"{dil} (control)"
-                fig.add_trace(
-                    go.Scatter(
-                        x=g["Freezing.temperature"],
-                        y=g["FF"],
-                        mode="markers",
-                        name=name,
-                        marker=dict(
-                            color=color_map.get(str(dil), palette[0]),
-                            symbol=symbol,
-                            size=point_size,
-                            opacity=0.9,
-                            line=dict(color="#111827", width=border_w),
-                        ),
-                        customdata=np.stack(
-                            [
-                                g["Sample"].astype(str).to_numpy(),
-                                g["Size"].astype(str).to_numpy(),
-                                g["Dilution.plot"].astype(str).to_numpy(),
-                                g["Control_norm"].astype(str).to_numpy(),
-                            ],
-                            axis=1,
-                        ),
-                        hovertemplate=(
-                            "Sample=%{customdata[0]}<br>Size=%{customdata[1]}<br>Dilution=%{customdata[2]}<br>"
-                            "Control=%{customdata[3]}<br>FF=%{y:.3f}<br>T=%{x:.2f}°C<extra></extra>"
-                        ),
-                    )
+                _add_ff_trace(g, name="Samples" if ctrl == "No" else "Controls", color=palette[0], ctrl=ctrl)
+        elif color_mode == "sample":
+            fig.update_layout(legend_title_text="Sample")
+            for i_s, smp in enumerate(samples):
+                ss = points[points["Sample"].astype(str) == smp]
+                for ctrl in ["No", "Yes"]:
+                    g = ss[ss["Control_norm"].astype(str) == ctrl]
+                    if len(g) == 0:
+                        continue
+                    name = smp if ctrl == "No" else f"{smp} (control)"
+                    _add_ff_trace(g, name=name, color=palette[i_s % len(palette)], ctrl=ctrl)
+        else:
+            # Sample hue, dilution shades (darkest = most concentrated); legend grouped by sample,
+            # placed on the right because grouped entries are too tall for the top band.
+            fig.update_layout(
+                legend=dict(
+                    orientation="v",
+                    x=1.02,
+                    xanchor="left",
+                    y=1.0,
+                    yanchor="top",
+                    groupclick="toggleitem",
+                    title=dict(text="Sample · Dilution.factor"),
                 )
+            )
+            for smp in samples:
+                ss = points[points["Sample"].astype(str) == smp]
+                first = True
+                for dil in dilutions:
+                    dd = ss[ss["Dilution.plot"].astype(str) == str(dil)]
+                    for ctrl in ["No", "Yes"]:
+                        g = dd[dd["Control_norm"].astype(str) == ctrl]
+                        if len(g) == 0:
+                            continue
+                        name = str(dil) if ctrl == "No" else f"{dil} (control)"
+                        extra: dict[str, Any] = {"legendgroup": smp}
+                        if first:
+                            extra["legendgrouptitle_text"] = smp
+                            first = False
+                        _add_ff_trace(g, name=name, color=shade_map[(smp, str(dil))], ctrl=ctrl, **extra)
 
         _style_axes(
             fig,
@@ -5596,6 +6224,7 @@ class FrozenFractionTab(QWidget):
             self.log.append(f"[ff] export error: {exc}")
 
     def _shutdown_background_threads(self) -> None:
+        self.report_box.shutdown()
         try:
             if self._ff_worker is not None:
                 self._ff_worker.request_cancel()
@@ -6288,7 +6917,7 @@ class KneepointTab(QWidget):
         plot_panel_lay = QVBoxLayout(plot_panel)
         plot_panel_lay.setSpacing(6)
         self.plot_view = QWebEngineView()
-        self.plot_view.setMinimumHeight(460)
+        self.plot_view.setMinimumHeight(520)  # = figure height, so the x-axis title is not clipped
         plot_panel_lay.addWidget(self.plot_view, stretch=1)
 
         bp_panel = QGroupBox("Kneepoint results")
@@ -7121,7 +7750,7 @@ class KneepointTab(QWidget):
                 _apply_plot_background(fig_card, bg_mode)
                 _apply_y_tick_style(fig_card, tick_style, bg_mode=bg_mode, y_is_log=True)
                 sample_view = ClickablePlotView()
-                sample_view.setMinimumHeight(500)
+                sample_view.setMinimumHeight(520)  # = figure height, so the x-axis title is not clipped
                 _set_plotly_html(sample_view, fig_card)
                 sample_view.clicked.connect(lambda s=sample_name: self._request_kp_report_sample_editor(s))
                 card_lay.addWidget(sample_view)
@@ -7981,7 +8610,7 @@ class BoxplotsTab(QWidget):
         plot_lay = QVBoxLayout(plot_panel)
         plot_lay.setSpacing(6)
         self.plot_view = QWebEngineView()
-        self.plot_view.setMinimumHeight(460)
+        self.plot_view.setMinimumHeight(500)  # = figure height, so the x-axis title is not clipped
         plot_lay.addWidget(self.plot_view, stretch=1)
 
         right_scroll = _build_vertical_scroll_stack(
